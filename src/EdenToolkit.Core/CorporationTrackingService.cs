@@ -54,6 +54,7 @@ public sealed class CorporationTrackingService(EsiClient esi, EveSsoService sso,
         var snapshots = new List<CharacterSnapshot>
         {
             await FetchPagedAsync(owner, "assets", $"latest/corporations/{corporationId}/assets/", token, character.CharacterId, refresh, cancellationToken),
+            await FetchPagedAsync(owner, "blueprints", $"latest/corporations/{corporationId}/blueprints/", token, character.CharacterId, refresh, cancellationToken),
             await FetchPagedAsync(owner, "jobs", $"latest/corporations/{corporationId}/industry/jobs/?include_completed=true", token, character.CharacterId, refresh, cancellationToken),
             await FetchPagedAsync(owner, "orders", $"latest/corporations/{corporationId}/orders/", token, character.CharacterId, refresh, cancellationToken),
             await FetchPagedAsync(owner, "order-history", $"latest/corporations/{corporationId}/orders/history/", token, character.CharacterId, refresh, cancellationToken),
@@ -144,7 +145,7 @@ public sealed class CorporationTrackingService(EsiClient esi, EveSsoService sso,
 
     private static string NormalizeKind(string kind) => kind.ToLowerInvariant() switch
     {
-        "assets" or "wallet" or "transactions" or "jobs" or "journal" or "orders" or "order-history" => kind.ToLowerInvariant(),
+        "assets" or "blueprints" or "wallet" or "transactions" or "jobs" or "journal" or "orders" or "order-history" => kind.ToLowerInvariant(),
         _ => throw new ArgumentException("Unsupported corporation data kind.", nameof(kind))
     };
 }

@@ -33,6 +33,7 @@ static async Task<int> MainAsync(string[] args)
             ["corporation", "show", var corporation, var kind] => await services.CorporationTracking.QueryAsync(corporation, kind, new(Limit: 100000)),
             ["corporation", "query", var corporation, var kind, .. var rest] =>
                 await services.CorporationTracking.QueryAsync(corporation, kind, GetCharacterQuery(rest)),
+            ["production", "capacity", var corporation, var item] => await services.ProductionCapacity.CalculateAsync(corporation, item),
             ["market", "quote", var item, .. var rest] => await services.Market.GetQuoteAsync(item,
                 GetOption(rest, "--hub") ?? "Hek", GetIntOption(rest, "--days") ?? 30, rest.Contains("--refresh")),
             ["market", "compare", var item, .. var rest] => await services.Market.CompareHubsAsync(item,
@@ -149,8 +150,9 @@ Usage:
                        [--side buy|sell] [--status STATUS] [--from DATE] [--to DATE]
   eden corporation list
   eden corporation sync <corporation-name-or-id> [--refresh]
-  eden corporation show <corporation-name-or-id> <assets|wallet|transactions|jobs|journal|orders|order-history>
+  eden corporation show <corporation-name-or-id> <assets|blueprints|wallet|transactions|jobs|journal|orders|order-history>
   eden corporation query <corporation-name-or-id> <aspect> [the same filters as character query]
+  eden production capacity <corporation-name-or-id> <product-or-blueprint-name-or-type-id>
   eden market quote <item-name-or-type-id> [--hub Hek|Jita|Dodixie|Amarr] [--days N] [--refresh]
   eden market compare <item-name-or-type-id> [--hubs Hek,Jita,Dodixie,Amarr] [--days N]
   eden inventory value [character-name-or-id] [--hub Hek|Jita|Dodixie|Amarr] [--location-id ID]

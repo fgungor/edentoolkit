@@ -7,13 +7,17 @@ public sealed record SdeStatus(bool Installed, string? ETag, DateTimeOffset? Upd
 public sealed record SdeName(long Id, string Name, string Kind);
 public sealed record PlanetSchematicMaterial(long TypeId, bool IsInput, long Quantity);
 public sealed record PlanetSchematic(int Id, string Name, int CycleTime, IReadOnlyList<PlanetSchematicMaterial> Materials);
+public sealed record ManufacturingMaterial(long TypeId, long Quantity);
+public sealed record ManufacturingRecipe(long BlueprintTypeId, long ProductTypeId, long ProductQuantity, long TimeSeconds,
+    IReadOnlyList<ManufacturingMaterial> Materials);
 
 public sealed class SdeService(HttpClient httpClient, EdenOptions options)
 {
-    private const int CurrentIndexVersion = 4;
+    private const int CurrentIndexVersion = 5;
     private const string IndexFile = "names.json";
     private const string MetadataFile = "metadata.json";
     private const string SchematicsFile = "planet-schematics.json";
+    private const string ManufacturingFile = "manufacturing-recipes.json";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = false };
     private static readonly string[] IndexedFiles =
     [
@@ -23,8 +27,10 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
     private readonly string _directory = Path.Combine(options.CacheDirectory, "sde");
     private Dictionary<string, SdeName>? _index;
     private Dictionary<int, PlanetSchematic>? _schematics;
+    private Dictionary<long, ManufacturingRecipe>? _manufacturing;
     private FileStamp? _indexStamp;
     private FileStamp? _schematicsStamp;
+    private FileStamp? _manufacturingStamp;
 
     public async Task<SdeStatus> UpdateAsync(bool force = false, CancellationToken cancellationToken = default)
     {
@@ -48,6 +54,7 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
                 await response.Content.CopyToAsync(output, cancellationToken);
             var index = await BuildIndexAsync(zipTemp, cancellationToken);
             var schematics = await BuildSchematicsAsync(zipTemp, cancellationToken);
+            var manufacturing = await BuildManufacturingAsync(zipTemp, cancellationToken);
             var indexTemp = Path.Combine(_directory, IndexFile + ".tmp");
             await using (var output = File.Create(indexTemp))
                 await JsonSerializer.SerializeAsync(output, index, JsonOptions, cancellationToken);
@@ -56,6 +63,10 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
             await using (var output = File.Create(schematicsTemp))
                 await JsonSerializer.SerializeAsync(output, schematics, JsonOptions, cancellationToken);
             File.Move(schematicsTemp, Path.Combine(_directory, SchematicsFile), true);
+            var manufacturingTemp = Path.Combine(_directory, ManufacturingFile + ".tmp");
+            await using (var output = File.Create(manufacturingTemp))
+                await JsonSerializer.SerializeAsync(output, manufacturing, JsonOptions, cancellationToken);
+            File.Move(manufacturingTemp, Path.Combine(_directory, ManufacturingFile), true);
 
             var newMetadata = new SdeMetadata(response.Headers.ETag?.ToString(), response.Content.Headers.LastModified,
                 DateTimeOffset.UtcNow, index.Count, CurrentIndexVersion);
@@ -65,6 +76,8 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
             _indexStamp = GetStamp(Path.Combine(_directory, IndexFile));
             _schematics = schematics;
             _schematicsStamp = GetStamp(Path.Combine(_directory, SchematicsFile));
+            _manufacturing = manufacturing;
+            _manufacturingStamp = GetStamp(Path.Combine(_directory, ManufacturingFile));
             return new(true, newMetadata.ETag, newMetadata.UpdatedAt, index.Count, _directory);
         }
         finally
@@ -115,6 +128,14 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
         }
         return _schematics.GetValueOrDefault(schematicId);
     }
+
+    public async Task<ManufacturingRecipe?> FindManufacturingByBlueprintAsync(long blueprintTypeId,
+        CancellationToken cancellationToken = default) =>
+        (await GetManufacturingAsync(cancellationToken)).GetValueOrDefault(blueprintTypeId);
+
+    public async Task<IReadOnlyList<ManufacturingRecipe>> FindManufacturingByProductAsync(long productTypeId,
+        CancellationToken cancellationToken = default) =>
+        (await GetManufacturingAsync(cancellationToken)).Values.Where(recipe => recipe.ProductTypeId == productTypeId).ToArray();
 
     public async Task<SdeStatus> StatusAsync(CancellationToken cancellationToken = default)
     {
@@ -186,6 +207,46 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
             result[id] = new(id, name, root.GetProperty("cycleTime").GetInt32(), materials);
         }
         return result;
+    }
+
+    private static async Task<Dictionary<long, ManufacturingRecipe>> BuildManufacturingAsync(string zipPath,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<long, ManufacturingRecipe>();
+        using var archive = ZipFile.OpenRead(zipPath);
+        var entry = archive.Entries.FirstOrDefault(candidate =>
+            Path.GetFileName(candidate.FullName).Equals("blueprints.jsonl", StringComparison.OrdinalIgnoreCase));
+        if (entry is null) return result;
+        await using var stream = entry.Open(); using var reader = new StreamReader(stream);
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            if (line.Length == 0) continue;
+            using var document = JsonDocument.Parse(line); var root = document.RootElement;
+            if (!root.TryGetProperty("activities", out var activities) ||
+                !activities.TryGetProperty("manufacturing", out var manufacturing) ||
+                !manufacturing.TryGetProperty("products", out var products)) continue;
+            var product = products.EnumerateArray().FirstOrDefault();
+            if (product.ValueKind == JsonValueKind.Undefined) continue;
+            var blueprintTypeId = root.TryGetProperty("blueprintTypeID", out var explicitId)
+                ? explicitId.GetInt64() : root.GetProperty("_key").GetInt64();
+            var materials = manufacturing.TryGetProperty("materials", out var materialRows)
+                ? materialRows.EnumerateArray().Select(item => new ManufacturingMaterial(
+                    item.GetProperty("typeID").GetInt64(), item.GetProperty("quantity").GetInt64())).ToArray() : [];
+            result[blueprintTypeId] = new(blueprintTypeId, product.GetProperty("typeID").GetInt64(),
+                product.GetProperty("quantity").GetInt64(), manufacturing.GetProperty("time").GetInt64(), materials);
+        }
+        return result;
+    }
+
+    private async Task<Dictionary<long, ManufacturingRecipe>> GetManufacturingAsync(CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(_directory, ManufacturingFile); var stamp = GetStamp(path);
+        if (_manufacturing is not null && _manufacturingStamp == stamp) return _manufacturing;
+        if (!File.Exists(path)) throw new InvalidOperationException("Manufacturing recipe data is not installed. Run 'eden sde update --force'.");
+        await using var stream = File.OpenRead(path);
+        _manufacturing = await JsonSerializer.DeserializeAsync<Dictionary<long, ManufacturingRecipe>>(stream, JsonOptions, cancellationToken)
+            ?? throw new InvalidDataException("The manufacturing recipe index is invalid. Run 'eden sde update --force'.");
+        _manufacturingStamp = stamp; return _manufacturing;
     }
 
     private static bool TryGetId(JsonElement root, out long id)

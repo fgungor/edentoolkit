@@ -90,6 +90,8 @@ eden character query <character-id> transactions --side buy --type-id 34
 eden character query <character-id> transactions --from 2026-08-01 --to 2026-08-31
 eden character query <character-id> jobs --status delivered --type-id 165
 eden character remove <character-id>
+eden corporation show <corporation-name-or-id> blueprints
+eden production capacity <corporation-name-or-id> "Hobgoblin II"
 ```
 
 Synced character data is stored in `%LOCALAPPDATA%/EdenToolkit/characters.db`. Location and wallet responses are stored as complete JSON values. Assets and skills are transactionally decomposed into indexed SQLite rows while retaining each complete ESI object as raw JSON. Wallet transactions, journal entries, industry jobs, and own market orders are keyed by their permanent ESI IDs and upserted, preserving previously synchronized history. Commands read the committed database state rather than returning the live response directly.
@@ -112,6 +114,12 @@ After publishing, add a stdio server using `artifacts/eden-mcp/eden-mcp.exe`. It
 - `eve_search_names`
 - `eve_sync_character`
 - `eve_character_data`
+- `eve_list_corporations`
+- `eve_sync_corporation`
+- `eve_corporation_data`
+- `eve_manufacturing_recipe`
+- `eve_production_capacity`
+- `eve_pi_data`
 - `eve_market_quote`
 - `eve_compare_market_hubs`
 - `eve_value_inventory`

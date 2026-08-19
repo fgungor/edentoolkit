@@ -75,14 +75,14 @@ public sealed class EveTools(EdenServices services)
     public Task<IReadOnlyList<TrackedCorporation>> ListCorporations(CancellationToken cancellationToken = default) =>
         services.Corporations.ListAsync(cancellationToken);
 
-    [McpServerTool(Name = "eve_sync_corporation"), Description("Sync a previously discovered corporation's assets, wallet divisions, wallet transactions and journal, industry/research jobs, and active/historical market orders.")]
+    [McpServerTool(Name = "eve_sync_corporation"), Description("Sync a previously discovered corporation's assets, owned blueprints with runs/ME/TE, wallet divisions, transactions and journal, industry/research jobs, and market orders.")]
     public Task<CorporationSyncResult> SyncCorporation([Description("Corporation name or ID.")] string corporation,
         [Description("Force ESI revalidation.")] bool refresh = false, CancellationToken cancellationToken = default) =>
         services.CorporationTracking.SyncAsync(corporation, refresh, cancellationToken);
 
     [McpServerTool(Name = "eve_corporation_data"), Description("Query previously synced corporation data from the same local SQLite tables used for character data, without calling ESI.")]
     public Task<CharacterSnapshot> CorporationData([Description("Corporation name or ID.")] string corporation,
-        [Description("One of: assets, wallet, transactions, jobs, journal, orders, order-history.")] string aspect,
+        [Description("One of: assets, blueprints, wallet, transactions, jobs, journal, orders, order-history.")] string aspect,
         [Description("Maximum rows.")] int limit = 1000, [Description("Row offset.")] int offset = 0,
         [Description("Optional type ID.")] long? typeId = null, [Description("Optional location ID.")] long? locationId = null,
         [Description("Optional transaction/order side: true for buys, false for sells.")] bool? isBuy = null,
@@ -91,6 +91,24 @@ public sealed class EveTools(EdenServices services)
         [Description("Optional inclusive upper date bound.")] DateTimeOffset? to = null,
         CancellationToken cancellationToken = default) => services.CorporationTracking.QueryAsync(corporation, aspect,
             new(limit, offset, typeId, locationId, null, isBuy, status, from, to), cancellationToken);
+
+    [McpServerTool(Name = "eve_manufacturing_recipe"), Description("Return the SDE manufacturing recipe for an exact product or blueprint type, including base materials, output quantity, and base time.")]
+    public async Task<object> ManufacturingRecipe([Description("Exact product/blueprint name or type ID.")] string item,
+        CancellationToken cancellationToken = default)
+    {
+        var matches = long.TryParse(item, out var id)
+            ? new[] { await services.Sde.FindByIdAsync(id, "types", cancellationToken) }.Where(value => value is not null).Cast<SdeName>().ToArray()
+            : (await services.Sde.SearchAsync(item, 100, cancellationToken)).Where(value => value.Kind == "types" && value.Name.Equals(item, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (matches.Length != 1) throw new KeyNotFoundException($"No exact item type matches '{item}'.");
+        var byBlueprint = await services.Sde.FindManufacturingByBlueprintAsync(matches[0].Id, cancellationToken);
+        var recipes = byBlueprint is null ? await services.Sde.FindManufacturingByProductAsync(matches[0].Id, cancellationToken) : [byBlueprint];
+        return new { item = matches[0], recipes };
+    }
+
+    [McpServerTool(Name = "eve_production_capacity"), Description("Calculate how many units a corporation can manufacture from its cached blueprint copies and cached asset stacks, applying each blueprint's remaining runs and material efficiency to SDE recipes.")]
+    public Task<ProductionCapacity> ProductionCapacity([Description("Corporation name or ID.")] string corporation,
+        [Description("Exact product/blueprint name or type ID.")] string item,
+        CancellationToken cancellationToken = default) => services.ProductionCapacity.CalculateAsync(corporation, item, cancellationToken);
 
     [McpServerTool(Name = "eve_market_quote"), Description("Get a compact current hub quote and regional historical statistics for an EVE item. Calculates best prices, 5%-depth VWAP prices, spread, and relevant order volume without exposing the raw order book.")]
     public Task<MarketQuoteAnalysis> MarketQuote([Description("Exact item name or numeric type ID.")] string item,

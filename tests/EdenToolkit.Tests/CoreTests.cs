@@ -106,6 +106,42 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ProductionCapacity_AppliesCopyRunsMaterialEfficiencyAndSharedAssets()
+    {
+        var zip = MakeZip(
+            ("types.jsonl", """
+                {"_key":100,"name":{"en":"Test Drone Blueprint"}}
+                {"_key":200,"name":{"en":"Test Drone"}}
+                {"_key":300,"name":{"en":"Morphite"}}
+                {"_key":400,"name":{"en":"Robotics"}}
+                """),
+            ("planetSchematics.jsonl", "{\"_key\":65,\"cycleTime\":1800,\"name\":{\"en\":\"Test PI\"},\"pins\":[2469],\"types\":[{\"_key\":300,\"isInput\":false,\"quantity\":20}]}\n"),
+            ("blueprints.jsonl", "{\"_key\":100,\"blueprintTypeID\":100,\"activities\":{\"manufacturing\":{\"time\":600,\"materials\":[{\"typeID\":300,\"quantity\":10},{\"typeID\":400,\"quantity\":20}],\"products\":[{\"typeID\":200,\"quantity\":1}]}}}\n"));
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(zip) });
+        using var services = CreateServices(handler); await services.Sde.UpdateAsync(force: true);
+        await File.WriteAllTextAsync(Path.Combine(_temp, "corporations.json"), """
+            [{"corporationId":98000001,"name":"Example Industries","authorizingCharacterId":7,"authorizingCharacterName":"Alice","lastSyncedAt":"2026-08-19T00:00:00Z"}]
+            """);
+        await services.CharacterData.SaveAsync(Snapshot(-98000001, "blueprints", """
+            [{"item_id":1,"type_id":100,"location_id":6001,"location_flag":"CorpSAG1","quantity":-2,"runs":5,"material_efficiency":10,"time_efficiency":20},
+             {"item_id":2,"type_id":100,"location_id":6001,"location_flag":"CorpSAG1","quantity":-2,"runs":5,"material_efficiency":10,"time_efficiency":20}]
+            """, DateTimeOffset.UtcNow));
+        await services.CharacterData.SaveAsync(Snapshot(-98000001, "assets", """
+            [{"item_id":10,"type_id":300,"location_id":6001,"location_type":"station","location_flag":"CorpSAG1","quantity":80,"is_singleton":false},
+             {"item_id":11,"type_id":400,"location_id":6001,"location_type":"station","location_flag":"CorpSAG1","quantity":160,"is_singleton":false}]
+            """, DateTimeOffset.UtcNow));
+
+        var capacity = await services.ProductionCapacity.CalculateAsync("Example Industries", "Test Drone");
+
+        Assert.Equal(8, capacity.BuildableRuns);
+        Assert.Equal(5, capacity.Blueprints[0].RunsUsed);
+        Assert.Equal(3, capacity.Blueprints[1].RunsUsed);
+        Assert.Equal(8, capacity.BuildableUnits);
+        Assert.Equal(8, capacity.Materials.Single(material => material.Name == "Morphite").Remaining);
+        Assert.Equal(16, capacity.Materials.Single(material => material.Name == "Robotics").Remaining);
+    }
+
+    [Fact]
     public async Task SdeUpdate_BuildsEnglishNameIndex()
     {
         var zip = MakeZip(("agentTypes.jsonl", "{\"_key\":1,\"name\":\"NonAgent\"}\n"),

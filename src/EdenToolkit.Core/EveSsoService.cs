@@ -14,6 +14,7 @@ public sealed class EveSsoService(HttpClient httpClient, EdenOptions options, Ch
     public static readonly string[] CorporationScopes =
     [
         "esi-characters.read_corporation_roles.v1", "esi-assets.read_corporation_assets.v1",
+        "esi-corporations.read_blueprints.v1",
         "esi-industry.read_corporation_jobs.v1", "esi-markets.read_corporation_orders.v1",
         "esi-wallet.read_corporation_wallets.v1"
     ];
