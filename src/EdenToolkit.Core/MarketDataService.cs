@@ -89,8 +89,8 @@ public sealed class MarketDataService(EsiClient esi, SdeService sde, MarketDataR
     {
         if (long.TryParse(item, out var id))
         {
-            var found = await sde.FindByIdAsync(id, cancellationToken);
-            if (found is { Kind: "types" }) return found;
+            var found = await sde.FindByIdAsync(id, "types", cancellationToken);
+            if (found is not null) return found;
             throw new KeyNotFoundException($"No item type exists with ID {id}.");
         }
         var matches = (await sde.SearchAsync(item, 100, cancellationToken)).Where(value => value.Kind == "types").ToArray();

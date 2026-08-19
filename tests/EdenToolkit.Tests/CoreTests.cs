@@ -110,6 +110,7 @@ public sealed class CoreTests : IDisposable
     {
         var zip = MakeZip(("agentTypes.jsonl", "{\"_key\":1,\"name\":\"NonAgent\"}\n"),
             ("types.jsonl", "{\"_key\":34,\"name\":{\"en\":\"Tritanium\",\"de\":\"Tritanium\"}}\n"),
+            ("marketGroups.jsonl", "{\"_key\":34,\"name\":{\"en\":\"Conflicting Market Group\"}}\n"),
             ("mapSolarSystems.jsonl", "{\"_key\":30000142,\"name\":{\"en\":\"Jita\"}}\n"),
             ("planetSchematics.jsonl", "{\"_key\":65,\"cycleTime\":1800,\"name\":{\"en\":\"Test PI\"},\"pins\":[2469],\"types\":[{\"_key\":34,\"isInput\":false,\"quantity\":20}]}\n"));
         var handler = new StubHandler(_ =>
@@ -121,14 +122,42 @@ public sealed class CoreTests : IDisposable
         using var services = CreateServices(handler);
 
         var status = await services.Sde.UpdateAsync();
-        var tritanium = await services.Sde.FindByIdAsync(34);
+        var tritanium = await services.Sde.FindByIdAsync(34, "types");
+        var marketGroup = await services.Sde.FindByIdAsync(34, "marketGroups");
+        var allIdMatches = await services.Sde.FindAllByIdAsync(34);
         var search = await services.Sde.SearchAsync("jit");
         var schematic = await services.Sde.FindPlanetSchematicAsync(65);
 
-        Assert.Equal(2, status.EntryCount);
+        Assert.Equal(3, status.EntryCount);
         Assert.Equal("Tritanium", tritanium?.Name);
+        Assert.Equal("Conflicting Market Group", marketGroup?.Name);
+        Assert.Equal(2, allIdMatches.Count);
         Assert.Equal(30000142, Assert.Single(search).Id);
         Assert.Equal(20, Assert.Single(schematic!.Materials).Quantity);
+    }
+
+    [Fact]
+    public async Task SdeService_ReloadsIndexesChangedByAnotherProcess()
+    {
+        var currentZip = MakePiSdeZip("Old Extractor Name", 20);
+        var handler = new StubHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(currentZip) };
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue($"\"build-{currentZip.Length}\"");
+            return response;
+        });
+        using var writer = CreateServices(handler);
+        using var longRunningReader = CreateServices(new StubHandler(_ => throw new InvalidOperationException()));
+
+        await writer.Sde.UpdateAsync(force: true);
+        Assert.Equal("Old Extractor Name", (await longRunningReader.Sde.FindByIdAsync(3062, "types"))?.Name);
+        Assert.Equal(20, Assert.Single((await longRunningReader.Sde.FindPlanetSchematicAsync(65))!.Materials).Quantity);
+
+        currentZip = MakePiSdeZip("Lava Extractor Control Unit", 25);
+        await writer.Sde.UpdateAsync(force: true);
+
+        Assert.Equal("Lava Extractor Control Unit", (await longRunningReader.Sde.FindByIdAsync(3062, "types"))?.Name);
+        Assert.Equal(25, Assert.Single((await longRunningReader.Sde.FindPlanetSchematicAsync(65))!.Materials).Quantity);
     }
 
     [Fact]
@@ -191,6 +220,7 @@ public sealed class CoreTests : IDisposable
     public async Task MarketDataService_ComputesHubDepthAndHistoryWithoutPersistingOrders()
     {
         var zip = MakeZip(("types.jsonl", "{\"_key\":34,\"name\":{\"en\":\"Tritanium\"}}\n"),
+            ("marketGroups.jsonl", "{\"_key\":34,\"name\":{\"en\":\"Conflicting Market Group\"}}\n"),
             ("planetSchematics.jsonl", "{\"_key\":65,\"cycleTime\":1800,\"name\":{\"en\":\"Test PI\"},\"pins\":[2469],\"types\":[{\"_key\":34,\"isInput\":false,\"quantity\":20}]}\n"));
         var handler = new StubHandler(request =>
         {
@@ -220,6 +250,7 @@ public sealed class CoreTests : IDisposable
         await services.Sde.UpdateAsync();
 
         var analysis = await services.Market.GetQuoteAsync("Tritanium", "Hek", 30);
+        var numericAnalysis = await services.Market.GetQuoteAsync("34", "Hek", 30);
         var persisted = await new MarketDataRepository(services.Options).ReadQuoteAsync(34, "Hek");
         await services.CharacterData.SaveAsync(Snapshot(7, "assets", """
             [{"item_id":1,"type_id":34,"location_id":60005686,"location_type":"station","location_flag":"Hangar","quantity":10,"is_singleton":false}]
@@ -227,6 +258,7 @@ public sealed class CoreTests : IDisposable
         var inventory = await services.Inventory.ValueAsync(7, "Hek");
 
         Assert.Equal(100m, analysis.Quote.BestBuy);
+        Assert.Equal("Tritanium", numericAnalysis.Quote.TypeName);
         Assert.Equal(120m, analysis.Quote.BestSell);
         Assert.Equal(100m, analysis.Quote.DepthBuy);
         Assert.Equal(120m, analysis.Quote.DepthSell);
@@ -272,6 +304,11 @@ public sealed class CoreTests : IDisposable
             }
         return output.ToArray();
     }
+
+    private static byte[] MakePiSdeZip(string typeName, int quantity) => MakeZip(
+        ("types.jsonl", $"{{\"_key\":3062,\"name\":{{\"en\":\"{typeName}\"}}}}\n"),
+        ("marketGroups.jsonl", "{\"_key\":3062,\"name\":{\"en\":\"Colliding Market Group\"}}\n"),
+        ("planetSchematics.jsonl", $"{{\"_key\":65,\"cycleTime\":1800,\"name\":{{\"en\":\"Test PI\"}},\"pins\":[2469],\"types\":[{{\"_key\":3062,\"isInput\":false,\"quantity\":{quantity}}}]}}\n"));
 
     public void Dispose()
     {

@@ -10,7 +10,7 @@ public sealed record PlanetSchematic(int Id, string Name, int CycleTime, IReadOn
 
 public sealed class SdeService(HttpClient httpClient, EdenOptions options)
 {
-    private const int CurrentIndexVersion = 3;
+    private const int CurrentIndexVersion = 4;
     private const string IndexFile = "names.json";
     private const string MetadataFile = "metadata.json";
     private const string SchematicsFile = "planet-schematics.json";
@@ -21,8 +21,10 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
         "mapRegions.jsonl", "mapConstellations.jsonl", "mapSolarSystems.jsonl", "mapPlanets.jsonl", "npcCorporations.jsonl"
     ];
     private readonly string _directory = Path.Combine(options.CacheDirectory, "sde");
-    private Dictionary<long, SdeName>? _index;
+    private Dictionary<string, SdeName>? _index;
     private Dictionary<int, PlanetSchematic>? _schematics;
+    private FileStamp? _indexStamp;
+    private FileStamp? _schematicsStamp;
 
     public async Task<SdeStatus> UpdateAsync(bool force = false, CancellationToken cancellationToken = default)
     {
@@ -60,7 +62,9 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
             await using var metadataStream = File.Create(Path.Combine(_directory, MetadataFile));
             await JsonSerializer.SerializeAsync(metadataStream, newMetadata, JsonOptions, cancellationToken);
             _index = index;
+            _indexStamp = GetStamp(Path.Combine(_directory, IndexFile));
             _schematics = schematics;
+            _schematicsStamp = GetStamp(Path.Combine(_directory, SchematicsFile));
             return new(true, newMetadata.ETag, newMetadata.UpdatedAt, index.Count, _directory);
         }
         finally
@@ -69,10 +73,18 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
         }
     }
 
-    public async Task<SdeName?> FindByIdAsync(long id, CancellationToken cancellationToken = default)
+    public async Task<SdeName?> FindByIdAsync(long id, string kind, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(kind);
+        var index = await GetIndexAsync(cancellationToken);
+        return index.GetValueOrDefault(IndexKey(kind, id));
+    }
+
+    public async Task<IReadOnlyList<SdeName>> FindAllByIdAsync(long id,
+        CancellationToken cancellationToken = default)
     {
         var index = await GetIndexAsync(cancellationToken);
-        return index.GetValueOrDefault(id);
+        return index.Values.Where(item => item.Id == id).OrderBy(item => item.Kind, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     public async Task<IReadOnlyList<SdeName>> SearchAsync(string query, int limit = 20, CancellationToken cancellationToken = default)
@@ -91,13 +103,15 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
     public async Task<PlanetSchematic?> FindPlanetSchematicAsync(int schematicId,
         CancellationToken cancellationToken = default)
     {
-        if (_schematics is null)
+        var path = Path.Combine(_directory, SchematicsFile);
+        var stamp = GetStamp(path);
+        if (_schematics is null || _schematicsStamp != stamp)
         {
-            var path = Path.Combine(_directory, SchematicsFile);
             if (!File.Exists(path)) throw new InvalidOperationException("PI schematic data is not installed. Run 'eden sde update --force'.");
             await using var stream = File.OpenRead(path);
             _schematics = await JsonSerializer.DeserializeAsync<Dictionary<int, PlanetSchematic>>(stream, JsonOptions, cancellationToken)
                 ?? throw new InvalidDataException("The PI schematic index is invalid. Run 'eden sde update --force'.");
+            _schematicsStamp = stamp;
         }
         return _schematics.GetValueOrDefault(schematicId);
     }
@@ -109,19 +123,22 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
             metadata?.UpdatedAt, metadata?.EntryCount ?? 0, _directory);
     }
 
-    private async Task<Dictionary<long, SdeName>> GetIndexAsync(CancellationToken cancellationToken)
+    private async Task<Dictionary<string, SdeName>> GetIndexAsync(CancellationToken cancellationToken)
     {
-        if (_index is not null) return _index;
         var path = Path.Combine(_directory, IndexFile);
+        var stamp = GetStamp(path);
+        if (_index is not null && _indexStamp == stamp) return _index;
         if (!File.Exists(path)) throw new InvalidOperationException("SDE is not installed. Run 'eden sde update' first.");
         await using var stream = File.OpenRead(path);
-        return _index = await JsonSerializer.DeserializeAsync<Dictionary<long, SdeName>>(stream, JsonOptions, cancellationToken)
+        _index = await JsonSerializer.DeserializeAsync<Dictionary<string, SdeName>>(stream, JsonOptions, cancellationToken)
             ?? throw new InvalidDataException("The SDE name index is invalid. Run 'eden sde update --force'.");
+        _indexStamp = stamp;
+        return _index;
     }
 
-    private static async Task<Dictionary<long, SdeName>> BuildIndexAsync(string zipPath, CancellationToken cancellationToken)
+    private static async Task<Dictionary<string, SdeName>> BuildIndexAsync(string zipPath, CancellationToken cancellationToken)
     {
-        var result = new Dictionary<long, SdeName>();
+        var result = new Dictionary<string, SdeName>(StringComparer.OrdinalIgnoreCase);
         using var archive = ZipFile.OpenRead(zipPath);
         foreach (var desired in IndexedFiles)
         {
@@ -137,12 +154,14 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
                 using var document = JsonDocument.Parse(line);
                 var root = document.RootElement;
                 if (!TryGetId(root, out var id) || !TryGetName(root, out var name)) continue;
-                result[id] = new(id, name, kind);
+                result[IndexKey(kind, id)] = new(id, name, kind);
             }
         }
         if (result.Count == 0) throw new InvalidDataException("The downloaded SDE contained none of the expected JSONL name datasets.");
         return result;
     }
+
+    private static string IndexKey(string kind, long id) => $"{kind.Trim().ToLowerInvariant()}:{id}";
 
     private static async Task<Dictionary<int, PlanetSchematic>> BuildSchematicsAsync(string zipPath,
         CancellationToken cancellationToken)
@@ -203,4 +222,11 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
 
     private sealed record SdeMetadata(string? ETag, DateTimeOffset? LastModified, DateTimeOffset UpdatedAt, int EntryCount,
         int IndexVersion = 0);
+    private readonly record struct FileStamp(long Length, DateTime LastWriteTimeUtc);
+    private static FileStamp? GetStamp(string path)
+    {
+        if (!File.Exists(path)) return null;
+        var info = new FileInfo(path);
+        return new(info.Length, info.LastWriteTimeUtc);
+    }
 }

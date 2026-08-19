@@ -25,8 +25,15 @@ public sealed class EveTools(EdenServices services)
     [McpServerTool(Name = "eve_sde_status"), Description("Report whether the SDE name index is installed, when it was updated, and its size.")]
     public Task<SdeStatus> SdeStatus(CancellationToken cancellationToken = default) => services.Sde.StatusAsync(cancellationToken);
 
-    [McpServerTool(Name = "eve_name_by_id"), Description("Resolve an EVE type, group, category, market group, region, constellation, solar system, or NPC corporation ID to its official English SDE name.")]
-    public Task<SdeName?> NameById([Description("Numeric EVE entity ID.")] long id, CancellationToken cancellationToken = default) => services.Sde.FindByIdAsync(id, cancellationToken);
+    [McpServerTool(Name = "eve_name_by_id"), Description("Resolve an EVE ID within an explicit SDE namespace. IDs are not globally unique across namespaces.")]
+    public async Task<IReadOnlyList<SdeName>> NameById([Description("Numeric EVE entity ID.")] long id,
+        [Description("Optional exact namespace such as types, marketGroups, groups, categories, mapRegions, mapConstellations, mapSolarSystems, mapPlanets, or npcCorporations. Omit to return every namespace match.")] string? kind = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(kind)) return await services.Sde.FindAllByIdAsync(id, cancellationToken);
+        var match = await services.Sde.FindByIdAsync(id, kind, cancellationToken);
+        return match is null ? [] : [match];
+    }
 
     [McpServerTool(Name = "eve_search_names"), Description("Search official English SDE names. Prefix matches rank first.")]
     public Task<IReadOnlyList<SdeName>> SearchNames([Description("Case-insensitive substring to find.")] string query,

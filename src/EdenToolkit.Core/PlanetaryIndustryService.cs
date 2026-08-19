@@ -40,13 +40,13 @@ public sealed class PlanetaryIndustryService(EsiClient esi, EveSsoService sso, C
         CancellationToken cancellationToken)
     {
         var colony = JsonNode.Parse(summary.GetRawText())!.AsObject();
-        colony["planet_name"] = await NameAsync(summary.GetProperty("planet_id").GetInt64(), cancellationToken);
-        colony["solar_system_name"] = await NameAsync(summary.GetProperty("solar_system_id").GetInt64(), cancellationToken);
+        colony["planet_name"] = await NameAsync(summary.GetProperty("planet_id").GetInt64(), "mapPlanets", cancellationToken);
+        colony["solar_system_name"] = await NameAsync(summary.GetProperty("solar_system_id").GetInt64(), "mapSolarSystems", cancellationToken);
         var pins = new JsonArray();
         foreach (var pinElement in layout.GetProperty("pins").EnumerateArray())
         {
             var pin = JsonNode.Parse(pinElement.GetRawText())!.AsObject();
-            var pinTypeName = await NameAsync(pinElement.GetProperty("type_id").GetInt64(), cancellationToken);
+            var pinTypeName = await NameAsync(pinElement.GetProperty("type_id").GetInt64(), "types", cancellationToken);
             pin["type_name"] = pinTypeName;
             pin["is_launchpad"] = pinTypeName?.Contains("Launchpad", StringComparison.OrdinalIgnoreCase) == true;
             if (pinElement.TryGetProperty("contents", out var contents))
@@ -55,7 +55,7 @@ public sealed class PlanetaryIndustryService(EsiClient esi, EveSsoService sso, C
                 foreach (var content in contents.EnumerateArray())
                 {
                     var item = JsonNode.Parse(content.GetRawText())!.AsObject();
-                    item["type_name"] = await NameAsync(content.GetProperty("type_id").GetInt64(), cancellationToken);
+                    item["type_name"] = await NameAsync(content.GetProperty("type_id").GetInt64(), "types", cancellationToken);
                     enriched.Add(item);
                 }
                 pin["contents"] = enriched;
@@ -64,7 +64,7 @@ public sealed class PlanetaryIndustryService(EsiClient esi, EveSsoService sso, C
             {
                 var details = JsonNode.Parse(extractor.GetRawText())!.AsObject();
                 if (extractor.TryGetProperty("product_type_id", out var product))
-                    details["product_type_name"] = await NameAsync(product.GetInt64(), cancellationToken);
+                    details["product_type_name"] = await NameAsync(product.GetInt64(), "types", cancellationToken);
                 pin["extractor_details"] = details;
             }
             var schematicId = GetSchematicId(pinElement);
@@ -85,7 +85,7 @@ public sealed class PlanetaryIndustryService(EsiClient esi, EveSsoService sso, C
         foreach (var routeElement in layout.GetProperty("routes").EnumerateArray())
         {
             var route = JsonNode.Parse(routeElement.GetRawText())!.AsObject();
-            route["content_type_name"] = await NameAsync(routeElement.GetProperty("content_type_id").GetInt64(), cancellationToken);
+            route["content_type_name"] = await NameAsync(routeElement.GetProperty("content_type_id").GetInt64(), "types", cancellationToken);
             routes.Add(route);
         }
         colony["routes"] = routes;
@@ -98,12 +98,12 @@ public sealed class PlanetaryIndustryService(EsiClient esi, EveSsoService sso, C
         var result = new JsonArray();
         foreach (var material in materials)
             result.Add(new JsonObject { ["type_id"] = material.TypeId,
-                ["type_name"] = await NameAsync(material.TypeId, cancellationToken), ["quantity"] = material.Quantity });
+                ["type_name"] = await NameAsync(material.TypeId, "types", cancellationToken), ["quantity"] = material.Quantity });
         return result;
     }
 
-    private async Task<string?> NameAsync(long id, CancellationToken cancellationToken) =>
-        (await sde.FindByIdAsync(id, cancellationToken))?.Name;
+    private async Task<string?> NameAsync(long id, string kind, CancellationToken cancellationToken) =>
+        (await sde.FindByIdAsync(id, kind, cancellationToken))?.Name;
 
     private static int? GetSchematicId(JsonElement pin) =>
         pin.TryGetProperty("factory_details", out var factory) && factory.TryGetProperty("schematic_id", out var nested)

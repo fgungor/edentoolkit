@@ -17,7 +17,7 @@ public sealed class InventoryService(CharacterDataRepository characterData, Mark
         decimal liquidation = 0, replacement = 0, selected = 0;
         foreach (var group in groups)
         {
-            var type = await sde.FindByIdAsync(group.TypeId, cancellationToken);
+            var type = await sde.FindByIdAsync(group.TypeId, "types", cancellationToken);
             var name = type?.Name ?? group.TypeId.ToString();
             var quote = await market.GetCachedOrRefreshQuoteAsync(group.TypeId, name, hub, TimeSpan.FromMinutes(5), cancellationToken);
             var liquidationPrice = quote.DepthBuy ?? quote.BestBuy;

@@ -16,7 +16,9 @@ static async Task<int> MainAsync(string[] args)
             ["status"] => await GetEsiAsync(services, "latest/status/", false),
             ["sde", "update", .. var rest] => await services.Sde.UpdateAsync(rest.Contains("--force")),
             ["sde", "status"] => await services.Sde.StatusAsync(),
-            ["name", "id", var id] when long.TryParse(id, out var parsed) => await services.Sde.FindByIdAsync(parsed) ?? throw new KeyNotFoundException($"No SDE name found for ID {parsed}."),
+            ["name", "id", var kind, var id] when long.TryParse(id, out var parsed) =>
+                await services.Sde.FindByIdAsync(parsed, kind) ?? throw new KeyNotFoundException($"No SDE {kind} name found for ID {parsed}."),
+            ["name", "id", var id] when long.TryParse(id, out var parsed) => await services.Sde.FindAllByIdAsync(parsed),
             ["name", "search", var query, .. var rest] => await services.Sde.SearchAsync(query, GetLimit(rest)),
             ["character", "add", .. var rest] => await AddCharacterAsync(services, rest),
             ["character", "list"] => await services.Characters.ListAsync(),
@@ -135,7 +137,7 @@ Usage:
   eden esi get <relative-path-and-query> [--refresh]
   eden sde update [--force]
   eden sde status
-  eden name id <id>
+  eden name id [kind] <id>
   eden name search <text> [--limit <1-100>]
   eden character add [--client-id <id>] [--redirect-uri <uri>] [--no-browser]
   eden character list
