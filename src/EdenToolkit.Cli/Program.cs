@@ -141,7 +141,7 @@ Usage:
   eden character list
   eden character remove <character-name-or-id>
   eden character sync <character-name-or-id|all> [--refresh]
-  eden character show <character-name-or-id> <location|assets|wallet|skills|transactions|jobs|journal|orders|order-history>
+  eden character show <character-name-or-id> <location|assets|wallet|skills|transactions|jobs|journal|orders|order-history|pi>
   eden character query <character-name-or-id> <aspect> [--limit N] [--offset N]
                        [--type-id ID] [--location-id ID] [--min-level N]
                        [--side buy|sell] [--status STATUS] [--from DATE] [--to DATE]

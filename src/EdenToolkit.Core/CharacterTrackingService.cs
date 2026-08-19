@@ -109,7 +109,7 @@ public sealed class CharacterTrackingService(EsiClient esi, EveSsoService sso, C
 
     private static string NormalizeKind(string kind) => kind.ToLowerInvariant() switch
     {
-        "location" or "assets" or "wallet" or "skills" or "transactions" or "jobs" or "journal" or "orders" or "order-history" => kind.ToLowerInvariant(),
+        "location" or "assets" or "wallet" or "skills" or "transactions" or "jobs" or "journal" or "orders" or "order-history" or "pi" => kind.ToLowerInvariant(),
         _ => throw new ArgumentException("Unsupported character data kind.", nameof(kind))
     };
 }

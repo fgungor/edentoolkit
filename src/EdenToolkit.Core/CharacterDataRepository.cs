@@ -61,7 +61,9 @@ public sealed class CharacterDataRepository
             case "orders" or "order-history":
                 await UpsertOrdersAsync(connection, transaction, snapshot, snapshot.Kind == "order-history", cancellationToken);
                 break;
-            default: throw new ArgumentException($"Unsupported character data aspect '{snapshot.Kind}'.");
+            default:
+                await ReplaceGenericAsync(connection, transaction, snapshot, cancellationToken);
+                break;
         }
         await transaction.CommitAsync(cancellationToken);
     }
@@ -86,7 +88,7 @@ public sealed class CharacterDataRepository
             "journal" => await ReadJournalAsync(connection, characterId, query, cancellationToken),
             "orders" => await ReadOrdersAsync(connection, characterId, query, false, cancellationToken),
             "order-history" => await ReadOrdersAsync(connection, characterId, query, true, cancellationToken),
-            _ => throw new ArgumentException("Unsupported character data aspect.", nameof(aspect))
+            _ => await ReadGenericAsync(connection, characterId, aspect, cancellationToken)
         };
         return new(characterId, aspect, state.FetchedAt, data, state.FromCache, state.IsStale);
     }
@@ -96,7 +98,7 @@ public sealed class CharacterDataRepository
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        foreach (var table in new[] { "character_assets", "character_skills", "character_skill_summaries", "wallet_transactions", "wallet_journal", "own_market_orders", "industry_jobs", "character_locations", "character_wallets", "sync_state" })
+        foreach (var table in new[] { "character_assets", "character_skills", "character_skill_summaries", "wallet_transactions", "wallet_journal", "own_market_orders", "industry_jobs", "character_locations", "character_wallets", "owner_snapshots", "sync_state" })
             await ExecuteAsync(connection, transaction, $"DELETE FROM {table} WHERE character_id=$character;", cancellationToken, ("$character", characterId));
         await transaction.CommitAsync(cancellationToken);
     }
@@ -160,7 +162,10 @@ public sealed class CharacterDataRepository
               PRIMARY KEY(character_id,order_id));
             CREATE INDEX IF NOT EXISTS ix_own_orders_character_history ON own_market_orders(character_id,is_historical,issued_at DESC);
             CREATE INDEX IF NOT EXISTS ix_own_orders_character_type ON own_market_orders(character_id,type_id);
-            PRAGMA user_version=4;
+            CREATE TABLE IF NOT EXISTS owner_snapshots (
+              character_id INTEGER NOT NULL, aspect TEXT NOT NULL, raw_json TEXT NOT NULL,
+              PRIMARY KEY(character_id,aspect));
+            PRAGMA user_version=5;
             """;
         command.ExecuteNonQuery();
     }
@@ -169,6 +174,23 @@ public sealed class CharacterDataRepository
         CharacterSnapshot snapshot, CancellationToken cancellationToken) => await ExecuteAsync(connection, transaction,
         $"INSERT INTO {table}(character_id, raw_json) VALUES($character, $json) ON CONFLICT(character_id) DO UPDATE SET raw_json=excluded.raw_json;",
         cancellationToken, ("$character", snapshot.CharacterId), ("$json", snapshot.Data.GetRawText()));
+
+    private static async Task ReplaceGenericAsync(SqliteConnection connection, SqliteTransaction transaction,
+        CharacterSnapshot snapshot, CancellationToken cancellationToken) => await ExecuteAsync(connection, transaction,
+        "INSERT INTO owner_snapshots(character_id,aspect,raw_json) VALUES($character,$aspect,$json) " +
+        "ON CONFLICT(character_id,aspect) DO UPDATE SET raw_json=excluded.raw_json;", cancellationToken,
+        ("$character", snapshot.CharacterId), ("$aspect", snapshot.Kind), ("$json", snapshot.Data.GetRawText()));
+
+    private static async Task<JsonElement> ReadGenericAsync(SqliteConnection connection, long characterId, string aspect,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT raw_json FROM owner_snapshots WHERE character_id=$character AND aspect=$aspect;";
+        command.Parameters.AddWithValue("$character", characterId); command.Parameters.AddWithValue("$aspect", aspect);
+        var json = (string?)await command.ExecuteScalarAsync(cancellationToken)
+            ?? throw new InvalidDataException("SQLite snapshot row is missing.");
+        return Parse(json);
+    }
 
     private static async Task ReplaceAssetsAsync(SqliteConnection connection, SqliteTransaction transaction,
         CharacterSnapshot snapshot, CancellationToken cancellationToken)

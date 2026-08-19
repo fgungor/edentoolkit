@@ -5,20 +5,24 @@ namespace EdenToolkit.Core;
 
 public sealed record SdeStatus(bool Installed, string? ETag, DateTimeOffset? UpdatedAt, int EntryCount, string Directory);
 public sealed record SdeName(long Id, string Name, string Kind);
+public sealed record PlanetSchematicMaterial(long TypeId, bool IsInput, long Quantity);
+public sealed record PlanetSchematic(int Id, string Name, int CycleTime, IReadOnlyList<PlanetSchematicMaterial> Materials);
 
 public sealed class SdeService(HttpClient httpClient, EdenOptions options)
 {
-    private const int CurrentIndexVersion = 2;
+    private const int CurrentIndexVersion = 3;
     private const string IndexFile = "names.json";
     private const string MetadataFile = "metadata.json";
+    private const string SchematicsFile = "planet-schematics.json";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = false };
     private static readonly string[] IndexedFiles =
     [
         "types.jsonl", "groups.jsonl", "categories.jsonl", "marketGroups.jsonl",
-        "mapRegions.jsonl", "mapConstellations.jsonl", "mapSolarSystems.jsonl", "npcCorporations.jsonl"
+        "mapRegions.jsonl", "mapConstellations.jsonl", "mapSolarSystems.jsonl", "mapPlanets.jsonl", "npcCorporations.jsonl"
     ];
     private readonly string _directory = Path.Combine(options.CacheDirectory, "sde");
     private Dictionary<long, SdeName>? _index;
+    private Dictionary<int, PlanetSchematic>? _schematics;
 
     public async Task<SdeStatus> UpdateAsync(bool force = false, CancellationToken cancellationToken = default)
     {
@@ -41,16 +45,22 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
             await using (var output = File.Create(zipTemp))
                 await response.Content.CopyToAsync(output, cancellationToken);
             var index = await BuildIndexAsync(zipTemp, cancellationToken);
+            var schematics = await BuildSchematicsAsync(zipTemp, cancellationToken);
             var indexTemp = Path.Combine(_directory, IndexFile + ".tmp");
             await using (var output = File.Create(indexTemp))
                 await JsonSerializer.SerializeAsync(output, index, JsonOptions, cancellationToken);
             File.Move(indexTemp, Path.Combine(_directory, IndexFile), true);
+            var schematicsTemp = Path.Combine(_directory, SchematicsFile + ".tmp");
+            await using (var output = File.Create(schematicsTemp))
+                await JsonSerializer.SerializeAsync(output, schematics, JsonOptions, cancellationToken);
+            File.Move(schematicsTemp, Path.Combine(_directory, SchematicsFile), true);
 
             var newMetadata = new SdeMetadata(response.Headers.ETag?.ToString(), response.Content.Headers.LastModified,
                 DateTimeOffset.UtcNow, index.Count, CurrentIndexVersion);
             await using var metadataStream = File.Create(Path.Combine(_directory, MetadataFile));
             await JsonSerializer.SerializeAsync(metadataStream, newMetadata, JsonOptions, cancellationToken);
             _index = index;
+            _schematics = schematics;
             return new(true, newMetadata.ETag, newMetadata.UpdatedAt, index.Count, _directory);
         }
         finally
@@ -76,6 +86,20 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
             .ThenBy(item => item.Name.Length)
             .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .Take(limit).ToArray();
+    }
+
+    public async Task<PlanetSchematic?> FindPlanetSchematicAsync(int schematicId,
+        CancellationToken cancellationToken = default)
+    {
+        if (_schematics is null)
+        {
+            var path = Path.Combine(_directory, SchematicsFile);
+            if (!File.Exists(path)) throw new InvalidOperationException("PI schematic data is not installed. Run 'eden sde update --force'.");
+            await using var stream = File.OpenRead(path);
+            _schematics = await JsonSerializer.DeserializeAsync<Dictionary<int, PlanetSchematic>>(stream, JsonOptions, cancellationToken)
+                ?? throw new InvalidDataException("The PI schematic index is invalid. Run 'eden sde update --force'.");
+        }
+        return _schematics.GetValueOrDefault(schematicId);
     }
 
     public async Task<SdeStatus> StatusAsync(CancellationToken cancellationToken = default)
@@ -120,9 +144,34 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
         return result;
     }
 
+    private static async Task<Dictionary<int, PlanetSchematic>> BuildSchematicsAsync(string zipPath,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<int, PlanetSchematic>();
+        using var archive = ZipFile.OpenRead(zipPath);
+        var entry = archive.Entries.FirstOrDefault(candidate =>
+            Path.GetFileName(candidate.FullName).Equals("planetSchematics.jsonl", StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidDataException("The downloaded SDE does not contain planetSchematics.jsonl.");
+        await using var stream = entry.Open();
+        using var reader = new StreamReader(stream);
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            if (line.Length == 0) continue;
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            var id = root.GetProperty("_key").GetInt32();
+            var name = root.GetProperty("name").GetProperty("en").GetString() ?? id.ToString();
+            var materials = root.GetProperty("types").EnumerateArray().Select(item => new PlanetSchematicMaterial(
+                item.GetProperty("_key").GetInt64(), item.GetProperty("isInput").GetBoolean(),
+                item.GetProperty("quantity").GetInt64())).ToArray();
+            result[id] = new(id, name, root.GetProperty("cycleTime").GetInt32(), materials);
+        }
+        return result;
+    }
+
     private static bool TryGetId(JsonElement root, out long id)
     {
-        foreach (var property in new[] { "_key", "typeID", "groupID", "categoryID", "marketGroupID", "regionID", "constellationID", "solarSystemID", "corporationID" })
+        foreach (var property in new[] { "_key", "typeID", "groupID", "categoryID", "marketGroupID", "regionID", "constellationID", "solarSystemID", "planetID", "corporationID" })
             if (root.TryGetProperty(property, out var value) && value.TryGetInt64(out id)) return true;
         id = 0;
         return false;

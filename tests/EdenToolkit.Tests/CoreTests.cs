@@ -110,7 +110,8 @@ public sealed class CoreTests : IDisposable
     {
         var zip = MakeZip(("agentTypes.jsonl", "{\"_key\":1,\"name\":\"NonAgent\"}\n"),
             ("types.jsonl", "{\"_key\":34,\"name\":{\"en\":\"Tritanium\",\"de\":\"Tritanium\"}}\n"),
-            ("mapSolarSystems.jsonl", "{\"_key\":30000142,\"name\":{\"en\":\"Jita\"}}\n"));
+            ("mapSolarSystems.jsonl", "{\"_key\":30000142,\"name\":{\"en\":\"Jita\"}}\n"),
+            ("planetSchematics.jsonl", "{\"_key\":65,\"cycleTime\":1800,\"name\":{\"en\":\"Test PI\"},\"pins\":[2469],\"types\":[{\"_key\":34,\"isInput\":false,\"quantity\":20}]}\n"));
         var handler = new StubHandler(_ =>
         {
             var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(zip) };
@@ -122,10 +123,12 @@ public sealed class CoreTests : IDisposable
         var status = await services.Sde.UpdateAsync();
         var tritanium = await services.Sde.FindByIdAsync(34);
         var search = await services.Sde.SearchAsync("jit");
+        var schematic = await services.Sde.FindPlanetSchematicAsync(65);
 
         Assert.Equal(2, status.EntryCount);
         Assert.Equal("Tritanium", tritanium?.Name);
         Assert.Equal(30000142, Assert.Single(search).Id);
+        Assert.Equal(20, Assert.Single(schematic!.Materials).Quantity);
     }
 
     [Fact]
@@ -157,6 +160,9 @@ public sealed class CoreTests : IDisposable
         await repository.SaveAsync(Snapshot(7, "orders", """
             [{"order_id":400,"type_id":34,"location_id":60005686,"is_buy_order":false,"price":120,"volume_remain":5,"volume_total":10,"issued":"2026-08-19T12:00:00Z"}]
             """, fetched));
+        await repository.SaveAsync(Snapshot(7, "pi", """
+            {"colonies":[{"planet_id":40000001,"pins":[{"pin_id":1,"is_launchpad":true,"contents":[{"type_id":34,"type_name":"Tritanium","amount":50}]}]}]}
+            """, fetched));
 
         var location = await repository.ReadAsync(7, "location");
         var assets = await repository.ReadAsync(7, "assets", new(TypeId: 34));
@@ -165,6 +171,7 @@ public sealed class CoreTests : IDisposable
         var jobs = await repository.ReadAsync(7, "jobs", new(TypeId: 165, Status: "delivered"));
         var journal = await repository.ReadAsync(7, "journal", new(Status: "market_transaction"));
         var orders = await repository.ReadAsync(7, "orders", new(TypeId: 34, IsBuy: false));
+        var pi = await repository.ReadAsync(7, "pi");
 
         Assert.Equal(30000142, location.Data.GetProperty("solar_system_id").GetInt64());
         Assert.Equal(1, Assert.Single(assets.Data.EnumerateArray()).GetProperty("item_id").GetInt64());
@@ -174,6 +181,7 @@ public sealed class CoreTests : IDisposable
         Assert.Equal(200, Assert.Single(jobs.Data.EnumerateArray()).GetProperty("job_id").GetInt64());
         Assert.Equal(300, Assert.Single(journal.Data.EnumerateArray()).GetProperty("id").GetInt64());
         Assert.Equal(400, Assert.Single(orders.Data.EnumerateArray()).GetProperty("order_id").GetInt64());
+        Assert.True(pi.Data.GetProperty("colonies")[0].GetProperty("pins")[0].GetProperty("is_launchpad").GetBoolean());
 
         await repository.DeleteCharacterAsync(7);
         await Assert.ThrowsAsync<FileNotFoundException>(() => repository.ReadAsync(7, "assets"));
@@ -182,7 +190,8 @@ public sealed class CoreTests : IDisposable
     [Fact]
     public async Task MarketDataService_ComputesHubDepthAndHistoryWithoutPersistingOrders()
     {
-        var zip = MakeZip(("types.jsonl", "{\"_key\":34,\"name\":{\"en\":\"Tritanium\"}}\n"));
+        var zip = MakeZip(("types.jsonl", "{\"_key\":34,\"name\":{\"en\":\"Tritanium\"}}\n"),
+            ("planetSchematics.jsonl", "{\"_key\":65,\"cycleTime\":1800,\"name\":{\"en\":\"Test PI\"},\"pins\":[2469],\"types\":[{\"_key\":34,\"isInput\":false,\"quantity\":20}]}\n"));
         var handler = new StubHandler(request =>
         {
             var path = request.RequestUri!.AbsolutePath;

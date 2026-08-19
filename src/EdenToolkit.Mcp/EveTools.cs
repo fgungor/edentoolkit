@@ -36,15 +36,15 @@ public sealed class EveTools(EdenServices services)
     public Task<IReadOnlyList<TrackedCharacter>> ListCharacters(CancellationToken cancellationToken = default) =>
         services.Characters.ListAsync(cancellationToken);
 
-    [McpServerTool(Name = "eve_sync_character"), Description("Refresh tracked character data including assets, wallet activity, industry jobs, and own market orders from ESI and transactionally store it in local SQLite.")]
+    [McpServerTool(Name = "eve_sync_character"), Description("Refresh tracked character data including assets, wallet activity, industry jobs, market orders, and planetary industry. If the character is a director, also sync corporation data. Store all results in local SQLite.")]
     public async Task<CharacterAndCorporationSyncResult> SyncCharacter([Description("Tracked character ID, full name, or unique first name. If the character is a corporation director, corporation data is also synced.")] string character,
         [Description("Force ESI revalidation instead of accepting fresh HTTP cache entries.")] bool refresh = false,
         CancellationToken cancellationToken = default) => await services.SyncCharacterAsync(
             (await services.Characters.ResolveAsync(character, cancellationToken)).CharacterId, refresh, cancellationToken);
 
-    [McpServerTool(Name = "eve_character_data"), Description("Query previously synced character location, assets, wallet, skills, wallet transactions, or industry jobs from local SQLite without calling ESI.")]
+    [McpServerTool(Name = "eve_character_data"), Description("Query previously synced character location, assets, wallet, skills, transactions, jobs, orders, or planetary-industry data from local SQLite without calling ESI.")]
     public async Task<CharacterSnapshot> CharacterData([Description("Tracked character ID, full name, or unique first name.")] string character,
-        [Description("One of: location, assets, wallet, skills, transactions, jobs, journal, orders, order-history.")] string aspect,
+        [Description("One of: location, assets, wallet, skills, transactions, jobs, journal, orders, order-history, pi.")] string aspect,
         [Description("Maximum asset or skill rows to return.")] int limit = 1000,
         [Description("Asset or skill row offset.")] int offset = 0,
         [Description("Optional asset type ID or skill type ID.")] long? typeId = null,
@@ -57,6 +57,12 @@ public sealed class EveTools(EdenServices services)
         CancellationToken cancellationToken = default) => await services.Tracking.QueryAsync(
             (await services.Characters.ResolveAsync(character, cancellationToken)).CharacterId, aspect,
             new(limit, offset, typeId, locationId, minimumSkillLevel, isBuy, status, from, to), cancellationToken);
+
+    [McpServerTool(Name = "eve_pi_data"), Description("Query cached planetary-industry colonies, production schematics and inputs/outputs, extractor programs, routes, and pin/launchpad inventory for a tracked character.")]
+    public async Task<CharacterSnapshot> PlanetaryIndustry(
+        [Description("Tracked character ID, full name, or unique first name.")] string character,
+        CancellationToken cancellationToken = default) => await services.PlanetaryIndustry.ReadAsync(
+            (await services.Characters.ResolveAsync(character, cancellationToken)).CharacterId, cancellationToken);
 
     [McpServerTool(Name = "eve_list_corporations"), Description("List corporations discovered through tracked director characters.")]
     public Task<IReadOnlyList<TrackedCorporation>> ListCorporations(CancellationToken cancellationToken = default) =>

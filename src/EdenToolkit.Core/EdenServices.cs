@@ -11,6 +11,7 @@ public sealed class EdenServices : IDisposable
     public EveSsoService Sso { get; }
     public CharacterTrackingService Tracking { get; }
     public CorporationTrackingService CorporationTracking { get; }
+    public PlanetaryIndustryService PlanetaryIndustry { get; }
     public CharacterDataRepository CharacterData { get; }
     public MarketDataService Market { get; }
     public InventoryService Inventory { get; }
@@ -29,6 +30,7 @@ public sealed class EdenServices : IDisposable
         CharacterData = new CharacterDataRepository(Options);
         Tracking = new CharacterTrackingService(Esi, Sso, Characters, CharacterData);
         CorporationTracking = new CorporationTrackingService(Esi, Sso, Characters, Corporations, CharacterData);
+        PlanetaryIndustry = new PlanetaryIndustryService(Esi, Sso, Characters, CharacterData, Sde);
         var marketRepository = new MarketDataRepository(Options);
         Market = new MarketDataService(Esi, Sde, marketRepository);
         Inventory = new InventoryService(CharacterData, Market, Sde);
@@ -40,9 +42,11 @@ public sealed class EdenServices : IDisposable
         CancellationToken cancellationToken = default)
     {
         var character = await Tracking.SyncAsync(characterId, refresh, cancellationToken);
+        var planetaryIndustry = await PlanetaryIndustry.SyncAsync(characterId, refresh, cancellationToken);
         var corporation = await CorporationTracking.SyncForDirectorAsync(characterId, refresh, cancellationToken);
-        return new(character, corporation);
+        return new(character, planetaryIndustry, corporation);
     }
 }
 
-public sealed record CharacterAndCorporationSyncResult(CharacterSyncResult Character, CorporationSyncResult? Corporation);
+public sealed record CharacterAndCorporationSyncResult(CharacterSyncResult Character, CharacterSnapshot PlanetaryIndustry,
+    CorporationSyncResult? Corporation);
