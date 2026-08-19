@@ -32,6 +32,24 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public async Task EsiClient_PartitionsAuthenticatedCacheByCharacter()
+    {
+        var handler = new StubHandler(request => Response(HttpStatusCode.OK,
+            $"{{\"authorization\":\"{request.Headers.Authorization?.Parameter}\"}}", TimeSpan.FromHours(1)));
+        using var services = CreateServices(handler);
+
+        var first = await services.Esi.GetAuthorizedAsync("latest/characters/1/wallet/", "token-one", 1);
+        var second = await services.Esi.GetAuthorizedAsync("latest/characters/1/wallet/", "token-two", 2);
+        var cached = await services.Esi.GetAuthorizedAsync("latest/characters/1/wallet/", "new-token", 1);
+
+        Assert.Equal("token-one", first.Data.GetProperty("authorization").GetString());
+        Assert.Equal("token-two", second.Data.GetProperty("authorization").GetString());
+        Assert.Equal("token-one", cached.Data.GetProperty("authorization").GetString());
+        Assert.True(cached.FromCache);
+        Assert.Equal(2, handler.RequestCount);
+    }
+
+    [Fact]
     public async Task SdeUpdate_BuildsEnglishNameIndex()
     {
         var zip = MakeZip(("types.jsonl", "{\"_key\":34,\"name\":{\"en\":\"Tritanium\",\"de\":\"Tritanium\"}}\n"),

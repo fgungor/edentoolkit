@@ -33,7 +33,32 @@ eden name search <text> [--limit <1-100>]
 
 The default cache is `%LOCALAPPDATA%/EdenToolkit`. Override it with `EDEN_CACHE_DIR`. Set `EDEN_USER_AGENT` to an identifying ESI User-Agent before distributing or operating the app as a service.
 
-Only public ESI GET endpoints are currently supported. EVE SSO and character-scoped endpoints are intentionally left for a subsequent slice.
+The generic `esi get` command remains limited to public endpoints; authenticated access is deliberately exposed through the character tracking commands below.
+
+## Track characters
+
+Register a native application in the EVE Developers Portal and add this exact callback URL:
+
+```text
+http://localhost:52731/callback/
+```
+
+Authorize characters using OAuth Authorization Code with PKCE; no client secret is required:
+
+```powershell
+eden character add
+eden character list
+eden character sync all
+eden character show <character-id> location
+eden character show <character-id> assets
+eden character show <character-id> wallet
+eden character show <character-id> skills
+eden character remove <character-id>
+```
+
+The authorization requests only `esi-location.read_location.v1`, `esi-assets.read_assets.v1`, `esi-wallet.read_character_wallet.v1`, and `esi-skills.read_skills.v1`. JWT signatures, issuers, audiences, expiration, character subjects, and granted scopes are validated. Refresh-token rotation is honored. On Windows, refresh tokens are encrypted with DPAPI for the current OS user; on other systems the character file is restricted to the current user but relies on filesystem protection.
+
+The distributed CLI uses EdenToolkit's registered public client ID by default. Forks and alternate registrations can override it with `--client-id` or `EDEN_EVE_CLIENT_ID`. PKCE does not embed or require a client secret.
 
 ## MCP
 

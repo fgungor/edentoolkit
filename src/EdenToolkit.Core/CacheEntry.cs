@@ -7,7 +7,10 @@ public sealed record CacheMetadata(
     DateTimeOffset ExpiresAt,
     string? ETag,
     DateTimeOffset? LastModified,
-    string ContentType);
+    string ContentType)
+{
+    public int Pages { get; init; } = 1;
+}
 
 public sealed class FileResponseCache(EdenOptions options)
 {
@@ -15,9 +18,12 @@ public sealed class FileResponseCache(EdenOptions options)
     private readonly string _directory = Path.Combine(options.CacheDirectory, "esi");
 
     public string KeyFor(Uri uri)
+        => KeyFor(uri.AbsoluteUri);
+
+    public string KeyFor(string value)
     {
         var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes(uri.AbsoluteUri)));
+            System.Text.Encoding.UTF8.GetBytes(value)));
         return hash;
     }
 
