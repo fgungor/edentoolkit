@@ -11,11 +11,18 @@ namespace EdenToolkit.Core;
 
 public sealed class EveSsoService(HttpClient httpClient, EdenOptions options, CharacterStore store)
 {
+    public static readonly string[] CorporationScopes =
+    [
+        "esi-characters.read_corporation_roles.v1", "esi-assets.read_corporation_assets.v1",
+        "esi-industry.read_corporation_jobs.v1", "esi-markets.read_corporation_orders.v1",
+        "esi-wallet.read_corporation_wallets.v1"
+    ];
     public static readonly string[] TrackingScopes =
     [
         "esi-location.read_location.v1", "esi-assets.read_assets.v1",
         "esi-wallet.read_character_wallet.v1", "esi-skills.read_skills.v1",
-        "esi-industry.read_character_jobs.v1", "esi-markets.read_character_orders.v1"
+        "esi-industry.read_character_jobs.v1", "esi-markets.read_character_orders.v1",
+        .. CorporationScopes
     ];
     private static readonly Uri MetadataUri = new("https://login.eveonline.com/.well-known/oauth-authorization-server");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);

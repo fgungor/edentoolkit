@@ -82,6 +82,30 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public async Task CorporationData_UsesSharedSnapshotTablesAndNameRegistry()
+    {
+        var options = new EdenOptions { CacheDirectory = _temp };
+        var corporations = new CorporationStore(options);
+        var repository = new CharacterDataRepository(options);
+        const long corporationId = 98000001;
+        await File.WriteAllTextAsync(Path.Combine(_temp, "corporations.json"), """
+            [{"corporationId":98000001,"name":"Example Industries","authorizingCharacterId":7,"authorizingCharacterName":"Alice Example","lastSyncedAt":"2026-08-19T00:00:00Z"}]
+            """);
+        await repository.SaveAsync(Snapshot(-corporationId, "assets", """
+            [{"item_id":10,"type_id":34,"location_id":60003760,"location_type":"station","location_flag":"CorpSAG1","quantity":500,"is_singleton":false}]
+            """, DateTimeOffset.UtcNow));
+        await repository.SaveAsync(Snapshot(-corporationId, "wallet", """
+            [{"division":1,"balance":12345.67}]
+            """, DateTimeOffset.UtcNow));
+
+        Assert.Equal(corporationId, (await corporations.ResolveAsync("Example Industries")).CorporationId);
+        Assert.Equal(500, Assert.Single((await repository.ReadAsync(-corporationId, "assets")).Data.EnumerateArray())
+            .GetProperty("quantity").GetInt64());
+        Assert.Equal(12345.67m, (await repository.ReadAsync(-corporationId, "wallet")).Data[0]
+            .GetProperty("balance").GetDecimal());
+    }
+
+    [Fact]
     public async Task SdeUpdate_BuildsEnglishNameIndex()
     {
         var zip = MakeZip(("agentTypes.jsonl", "{\"_key\":1,\"name\":\"NonAgent\"}\n"),

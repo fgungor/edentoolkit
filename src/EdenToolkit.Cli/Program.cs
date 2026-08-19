@@ -22,10 +22,15 @@ static async Task<int> MainAsync(string[] args)
             ["character", "list"] => await services.Characters.ListAsync(),
             ["character", "remove", var character] => await RemoveCharacterAsync(services, (await services.Characters.ResolveAsync(character)).CharacterId),
             ["character", "sync", "all", .. var rest] => await SyncAllAsync(services, rest.Contains("--refresh")),
-            ["character", "sync", var character, .. var rest] => await services.Tracking.SyncAsync((await services.Characters.ResolveAsync(character)).CharacterId, rest.Contains("--refresh")),
+            ["character", "sync", var character, .. var rest] => await services.SyncCharacterAsync((await services.Characters.ResolveAsync(character)).CharacterId, rest.Contains("--refresh")),
             ["character", "show", var character, var kind] => await services.Tracking.ReadAsync((await services.Characters.ResolveAsync(character)).CharacterId, kind),
             ["character", "query", var character, var kind, .. var rest] =>
                 await services.Tracking.QueryAsync((await services.Characters.ResolveAsync(character)).CharacterId, kind, GetCharacterQuery(rest)),
+            ["corporation", "list"] => await services.Corporations.ListAsync(),
+            ["corporation", "sync", var corporation, .. var rest] => await services.CorporationTracking.SyncAsync(corporation, rest.Contains("--refresh")),
+            ["corporation", "show", var corporation, var kind] => await services.CorporationTracking.QueryAsync(corporation, kind, new(Limit: 100000)),
+            ["corporation", "query", var corporation, var kind, .. var rest] =>
+                await services.CorporationTracking.QueryAsync(corporation, kind, GetCharacterQuery(rest)),
             ["market", "quote", var item, .. var rest] => await services.Market.GetQuoteAsync(item,
                 GetOption(rest, "--hub") ?? "Hek", GetIntOption(rest, "--days") ?? 30, rest.Contains("--refresh")),
             ["market", "compare", var item, .. var rest] => await services.Market.CompareHubsAsync(item,
@@ -52,11 +57,11 @@ static async Task<TrackedCharacter> AddCharacterAsync(EdenServices services, str
     });
 }
 
-static async Task<IReadOnlyList<CharacterSyncResult>> SyncAllAsync(EdenServices services, bool refresh)
+static async Task<IReadOnlyList<CharacterAndCorporationSyncResult>> SyncAllAsync(EdenServices services, bool refresh)
 {
-    var results = new List<CharacterSyncResult>();
+    var results = new List<CharacterAndCorporationSyncResult>();
     foreach (var character in await services.Characters.ListAsync())
-        results.Add(await services.Tracking.SyncAsync(character.CharacterId, refresh));
+        results.Add(await services.SyncCharacterAsync(character.CharacterId, refresh));
     return results;
 }
 
@@ -140,6 +145,10 @@ Usage:
   eden character query <character-name-or-id> <aspect> [--limit N] [--offset N]
                        [--type-id ID] [--location-id ID] [--min-level N]
                        [--side buy|sell] [--status STATUS] [--from DATE] [--to DATE]
+  eden corporation list
+  eden corporation sync <corporation-name-or-id> [--refresh]
+  eden corporation show <corporation-name-or-id> <assets|wallet|transactions|jobs|journal|orders|order-history>
+  eden corporation query <corporation-name-or-id> <aspect> [the same filters as character query]
   eden market quote <item-name-or-type-id> [--hub Hek|Jita|Dodixie|Amarr] [--days N] [--refresh]
   eden market compare <item-name-or-type-id> [--hubs Hek,Jita,Dodixie,Amarr] [--days N]
   eden inventory value [character-name-or-id] [--hub Hek|Jita|Dodixie|Amarr] [--location-id ID]

@@ -37,9 +37,9 @@ public sealed class EveTools(EdenServices services)
         services.Characters.ListAsync(cancellationToken);
 
     [McpServerTool(Name = "eve_sync_character"), Description("Refresh tracked character data including assets, wallet activity, industry jobs, and own market orders from ESI and transactionally store it in local SQLite.")]
-    public async Task<CharacterSyncResult> SyncCharacter([Description("Tracked character ID, full name, or unique first name.")] string character,
+    public async Task<CharacterAndCorporationSyncResult> SyncCharacter([Description("Tracked character ID, full name, or unique first name. If the character is a corporation director, corporation data is also synced.")] string character,
         [Description("Force ESI revalidation instead of accepting fresh HTTP cache entries.")] bool refresh = false,
-        CancellationToken cancellationToken = default) => await services.Tracking.SyncAsync(
+        CancellationToken cancellationToken = default) => await services.SyncCharacterAsync(
             (await services.Characters.ResolveAsync(character, cancellationToken)).CharacterId, refresh, cancellationToken);
 
     [McpServerTool(Name = "eve_character_data"), Description("Query previously synced character location, assets, wallet, skills, wallet transactions, or industry jobs from local SQLite without calling ESI.")]
@@ -57,6 +57,27 @@ public sealed class EveTools(EdenServices services)
         CancellationToken cancellationToken = default) => await services.Tracking.QueryAsync(
             (await services.Characters.ResolveAsync(character, cancellationToken)).CharacterId, aspect,
             new(limit, offset, typeId, locationId, minimumSkillLevel, isBuy, status, from, to), cancellationToken);
+
+    [McpServerTool(Name = "eve_list_corporations"), Description("List corporations discovered through tracked director characters.")]
+    public Task<IReadOnlyList<TrackedCorporation>> ListCorporations(CancellationToken cancellationToken = default) =>
+        services.Corporations.ListAsync(cancellationToken);
+
+    [McpServerTool(Name = "eve_sync_corporation"), Description("Sync a previously discovered corporation's assets, wallet divisions, wallet transactions and journal, industry/research jobs, and active/historical market orders.")]
+    public Task<CorporationSyncResult> SyncCorporation([Description("Corporation name or ID.")] string corporation,
+        [Description("Force ESI revalidation.")] bool refresh = false, CancellationToken cancellationToken = default) =>
+        services.CorporationTracking.SyncAsync(corporation, refresh, cancellationToken);
+
+    [McpServerTool(Name = "eve_corporation_data"), Description("Query previously synced corporation data from the same local SQLite tables used for character data, without calling ESI.")]
+    public Task<CharacterSnapshot> CorporationData([Description("Corporation name or ID.")] string corporation,
+        [Description("One of: assets, wallet, transactions, jobs, journal, orders, order-history.")] string aspect,
+        [Description("Maximum rows.")] int limit = 1000, [Description("Row offset.")] int offset = 0,
+        [Description("Optional type ID.")] long? typeId = null, [Description("Optional location ID.")] long? locationId = null,
+        [Description("Optional transaction/order side: true for buys, false for sells.")] bool? isBuy = null,
+        [Description("Optional job/order/journal status.")] string? status = null,
+        [Description("Optional inclusive lower date bound.")] DateTimeOffset? from = null,
+        [Description("Optional inclusive upper date bound.")] DateTimeOffset? to = null,
+        CancellationToken cancellationToken = default) => services.CorporationTracking.QueryAsync(corporation, aspect,
+            new(limit, offset, typeId, locationId, null, isBuy, status, from, to), cancellationToken);
 
     [McpServerTool(Name = "eve_market_quote"), Description("Get a compact current hub quote and regional historical statistics for an EVE item. Calculates best prices, 5%-depth VWAP prices, spread, and relevant order volume without exposing the raw order book.")]
     public Task<MarketQuoteAnalysis> MarketQuote([Description("Exact item name or numeric type ID.")] string item,
