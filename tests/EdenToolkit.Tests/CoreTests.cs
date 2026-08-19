@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using EdenToolkit.Core;
 
 namespace EdenToolkit.Tests;
@@ -69,6 +70,42 @@ public sealed class CoreTests : IDisposable
         Assert.Equal(2, status.EntryCount);
         Assert.Equal("Tritanium", tritanium?.Name);
         Assert.Equal(30000142, Assert.Single(search).Id);
+    }
+
+    [Fact]
+    public async Task CharacterDataRepository_StoresAndQueriesDecomposedObjects()
+    {
+        var repository = new CharacterDataRepository(new EdenOptions { CacheDirectory = _temp });
+        var fetched = DateTimeOffset.UtcNow;
+        await repository.SaveAsync(Snapshot(7, "location", "{\"solar_system_id\":30000142}", fetched));
+        await repository.SaveAsync(Snapshot(7, "wallet", "1234.5", fetched));
+        await repository.SaveAsync(Snapshot(7, "assets", """
+            [{"item_id":1,"type_id":34,"location_id":60003760,"location_type":"station","location_flag":"Hangar","quantity":10,"is_singleton":false},
+             {"item_id":2,"type_id":35,"location_id":60008494,"location_type":"station","location_flag":"Hangar","quantity":20,"is_singleton":false}]
+            """, fetched));
+        await repository.SaveAsync(Snapshot(7, "skills", """
+            {"total_sp":3000,"skills":[
+              {"skill_id":3300,"active_skill_level":5,"trained_skill_level":5,"skillpoints_in_skill":2000},
+              {"skill_id":3301,"active_skill_level":3,"trained_skill_level":3,"skillpoints_in_skill":1000}]}
+            """, fetched));
+
+        var location = await repository.ReadAsync(7, "location");
+        var assets = await repository.ReadAsync(7, "assets", new(TypeId: 34));
+        var skills = await repository.ReadAsync(7, "skills", new(MinimumSkillLevel: 5));
+
+        Assert.Equal(30000142, location.Data.GetProperty("solar_system_id").GetInt64());
+        Assert.Equal(1, Assert.Single(assets.Data.EnumerateArray()).GetProperty("item_id").GetInt64());
+        Assert.Equal(3300, Assert.Single(skills.Data.GetProperty("skills").EnumerateArray()).GetProperty("skill_id").GetInt64());
+        Assert.Equal(3000, skills.Data.GetProperty("total_sp").GetInt64());
+
+        await repository.DeleteCharacterAsync(7);
+        await Assert.ThrowsAsync<FileNotFoundException>(() => repository.ReadAsync(7, "assets"));
+    }
+
+    private static CharacterSnapshot Snapshot(long characterId, string kind, string json, DateTimeOffset fetched)
+    {
+        using var document = JsonDocument.Parse(json);
+        return new(characterId, kind, fetched, document.RootElement.Clone(), false, false);
     }
 
     private EdenServices CreateServices(HttpMessageHandler handler) => new(new EdenOptions

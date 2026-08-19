@@ -9,6 +9,7 @@ public sealed class EdenServices : IDisposable
     public CharacterStore Characters { get; }
     public EveSsoService Sso { get; }
     public CharacterTrackingService Tracking { get; }
+    public CharacterDataRepository CharacterData { get; }
 
     public EdenServices(EdenOptions? options = null, HttpMessageHandler? handler = null)
     {
@@ -20,7 +21,8 @@ public sealed class EdenServices : IDisposable
         Sde = new SdeService(_httpClient, Options);
         Characters = new CharacterStore(Options);
         Sso = new EveSsoService(_httpClient, Options, Characters);
-        Tracking = new CharacterTrackingService(Esi, Sso, Characters, Options);
+        CharacterData = new CharacterDataRepository(Options);
+        Tracking = new CharacterTrackingService(Esi, Sso, Characters, CharacterData);
     }
 
     public void Dispose() => _httpClient.Dispose();

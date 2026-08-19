@@ -31,4 +31,20 @@ public sealed class EveTools(EdenServices services)
     [McpServerTool(Name = "eve_search_names"), Description("Search official English SDE names. Prefix matches rank first.")]
     public Task<IReadOnlyList<SdeName>> SearchNames([Description("Case-insensitive substring to find.")] string query,
         [Description("Maximum matches, from 1 to 100.")] int limit = 20, CancellationToken cancellationToken = default) => services.Sde.SearchAsync(query, limit, cancellationToken);
+
+    [McpServerTool(Name = "eve_sync_character"), Description("Refresh a tracked character's location, assets, wallet, and skills from ESI and transactionally store them in local SQLite.")]
+    public Task<CharacterSyncResult> SyncCharacter([Description("Tracked EVE character ID.")] long characterId,
+        [Description("Force ESI revalidation instead of accepting fresh HTTP cache entries.")] bool refresh = false,
+        CancellationToken cancellationToken = default) => services.Tracking.SyncAsync(characterId, refresh, cancellationToken);
+
+    [McpServerTool(Name = "eve_character_data"), Description("Query previously synced character location, assets, wallet, or skills from local SQLite without calling ESI.")]
+    public Task<CharacterSnapshot> CharacterData([Description("Tracked EVE character ID.")] long characterId,
+        [Description("One of: location, assets, wallet, skills.")] string aspect,
+        [Description("Maximum asset or skill rows to return.")] int limit = 1000,
+        [Description("Asset or skill row offset.")] int offset = 0,
+        [Description("Optional asset type ID or skill type ID.")] long? typeId = null,
+        [Description("Optional asset location ID.")] long? locationId = null,
+        [Description("Optional minimum trained skill level.")] int? minimumSkillLevel = null,
+        CancellationToken cancellationToken = default) => services.Tracking.QueryAsync(characterId, aspect,
+            new(limit, offset, typeId, locationId, minimumSkillLevel), cancellationToken);
 }

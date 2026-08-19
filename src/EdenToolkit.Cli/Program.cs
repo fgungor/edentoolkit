@@ -20,10 +20,12 @@ static async Task<int> MainAsync(string[] args)
             ["name", "search", var query, .. var rest] => await services.Sde.SearchAsync(query, GetLimit(rest)),
             ["character", "add", .. var rest] => await AddCharacterAsync(services, rest),
             ["character", "list"] => await services.Characters.ListAsync(),
-            ["character", "remove", var id] when long.TryParse(id, out var parsed) => new { characterId = parsed, removed = await services.Characters.RemoveAsync(parsed) },
+            ["character", "remove", var id] when long.TryParse(id, out var parsed) => await RemoveCharacterAsync(services, parsed),
             ["character", "sync", "all", .. var rest] => await SyncAllAsync(services, rest.Contains("--refresh")),
             ["character", "sync", var id, .. var rest] when long.TryParse(id, out var parsed) => await services.Tracking.SyncAsync(parsed, rest.Contains("--refresh")),
             ["character", "show", var id, var kind] when long.TryParse(id, out var parsed) => await services.Tracking.ReadAsync(parsed, kind),
+            ["character", "query", var id, var kind, .. var rest] when long.TryParse(id, out var parsed) =>
+                await services.Tracking.QueryAsync(parsed, kind, GetCharacterQuery(rest)),
             _ => throw new ArgumentException("Unknown or incomplete command. Run 'eden help'.")
         };
         Console.WriteLine(JsonSerializer.Serialize(output, jsonOptions));
@@ -52,11 +54,28 @@ static async Task<IReadOnlyList<CharacterSyncResult>> SyncAllAsync(EdenServices 
     return results;
 }
 
+static async Task<object> RemoveCharacterAsync(EdenServices services, long characterId)
+{
+    var removed = await services.Characters.RemoveAsync(characterId);
+    await services.CharacterData.DeleteCharacterAsync(characterId);
+    return new { characterId, removed, cachedDataPurged = true };
+}
+
 static string? GetOption(string[] args, string name)
 {
     var index = Array.IndexOf(args, name);
     return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
 }
+
+static CharacterDataQuery GetCharacterQuery(string[] args) => new(
+    Limit: GetIntOption(args, "--limit") ?? 1000,
+    Offset: GetIntOption(args, "--offset") ?? 0,
+    TypeId: GetLongOption(args, "--type-id"),
+    LocationId: GetLongOption(args, "--location-id"),
+    MinimumSkillLevel: GetIntOption(args, "--min-level"));
+
+static int? GetIntOption(string[] args, string name) => int.TryParse(GetOption(args, name), out var value) ? value : null;
+static long? GetLongOption(string[] args, string name) => long.TryParse(GetOption(args, name), out var value) ? value : null;
 
 static async Task<object> GetEsiAsync(EdenServices services, string path, bool refresh)
 {
@@ -85,6 +104,8 @@ Usage:
   eden character remove <character-id>
   eden character sync <character-id|all> [--refresh]
   eden character show <character-id> <location|assets|wallet|skills>
+  eden character query <character-id> <aspect> [--limit N] [--offset N]
+                       [--type-id ID] [--location-id ID] [--min-level N]
 
 Environment:
   EDEN_CACHE_DIR                 Override the local cache directory

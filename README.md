@@ -53,8 +53,13 @@ eden character show <character-id> location
 eden character show <character-id> assets
 eden character show <character-id> wallet
 eden character show <character-id> skills
+eden character query <character-id> assets --type-id 34 --limit 100
+eden character query <character-id> assets --location-id 60003760
+eden character query <character-id> skills --min-level 5
 eden character remove <character-id>
 ```
+
+Synced character data is stored in `%LOCALAPPDATA%/EdenToolkit/characters.db`. Location and wallet responses are stored as complete JSON values. Assets and skills are transactionally decomposed into indexed SQLite rows while retaining each complete ESI object as raw JSON. Commands read the committed database state rather than returning the live response directly. Re-syncing an aspect atomically replaces its previous rows, so readers never observe a partial asset or skill refresh.
 
 The authorization requests only `esi-location.read_location.v1`, `esi-assets.read_assets.v1`, `esi-wallet.read_character_wallet.v1`, and `esi-skills.read_skills.v1`. JWT signatures, issuers, audiences, expiration, character subjects, and granted scopes are validated. Refresh-token rotation is honored. On Windows, refresh tokens are encrypted with DPAPI for the current OS user; on other systems the character file is restricted to the current user but relies on filesystem protection.
 
@@ -70,6 +75,8 @@ After publishing, add a stdio server using `artifacts/eden-mcp/eden-mcp.exe`. It
 - `eve_sde_status`
 - `eve_name_by_id`
 - `eve_search_names`
+- `eve_sync_character`
+- `eve_character_data`
 
 All MCP logging goes to stderr so stdout remains a clean protocol stream.
 

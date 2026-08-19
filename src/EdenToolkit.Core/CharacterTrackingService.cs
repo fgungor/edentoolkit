@@ -6,11 +6,8 @@ public sealed record CharacterSnapshot(long CharacterId, string Kind, DateTimeOf
     bool FromCache, bool IsStale);
 public sealed record CharacterSyncResult(long CharacterId, DateTimeOffset SyncedAt, IReadOnlyList<CharacterSnapshot> Snapshots);
 
-public sealed class CharacterTrackingService(EsiClient esi, EveSsoService sso, CharacterStore store, EdenOptions options)
+public sealed class CharacterTrackingService(EsiClient esi, EveSsoService sso, CharacterStore store, CharacterDataRepository data)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    private readonly string _directory = Path.Combine(options.CacheDirectory, "characters");
-
     public async Task<CharacterSyncResult> SyncAsync(long characterId, bool refresh = false, CancellationToken cancellationToken = default)
     {
         if (await store.FindAsync(characterId, cancellationToken) is null)
@@ -26,23 +23,19 @@ public sealed class CharacterTrackingService(EsiClient esi, EveSsoService sso, C
         return new(characterId, DateTimeOffset.UtcNow, snapshots);
     }
 
-    public async Task<CharacterSnapshot> ReadAsync(long characterId, string kind, CancellationToken cancellationToken = default)
-    {
-        kind = NormalizeKind(kind);
-        var path = SnapshotPath(characterId, kind);
-        if (!File.Exists(path)) throw new FileNotFoundException($"No {kind} snapshot exists for character {characterId}. Run 'eden character sync {characterId}'.");
-        await using var stream = File.OpenRead(path);
-        return await JsonSerializer.DeserializeAsync<CharacterSnapshot>(stream, JsonOptions, cancellationToken)
-            ?? throw new InvalidDataException($"The {kind} snapshot is invalid.");
-    }
+    public Task<CharacterSnapshot> ReadAsync(long characterId, string kind, CancellationToken cancellationToken = default) =>
+        QueryAsync(characterId, kind, new(Limit: 100000), cancellationToken);
+
+    public Task<CharacterSnapshot> QueryAsync(long characterId, string kind, CharacterDataQuery query,
+        CancellationToken cancellationToken = default) => data.ReadAsync(characterId, NormalizeKind(kind), query, cancellationToken);
 
     private async Task<CharacterSnapshot> FetchAsync(long characterId, string kind, string path, string token,
         bool refresh, CancellationToken cancellationToken)
     {
         var result = await esi.GetAuthorizedAsync(path, token, characterId, refresh, cancellationToken);
         var snapshot = new CharacterSnapshot(characterId, kind, DateTimeOffset.UtcNow, result.Data, result.FromCache, result.IsStale);
-        await SaveAsync(snapshot, cancellationToken);
-        return snapshot;
+        await data.SaveAsync(snapshot, cancellationToken);
+        return await data.ReadAsync(characterId, kind, new(Limit: 100000), cancellationToken);
     }
 
     private async Task<CharacterSnapshot> FetchAssetsAsync(long characterId, string token, bool refresh, CancellationToken cancellationToken)
@@ -58,22 +51,12 @@ public sealed class CharacterTrackingService(EsiClient esi, EveSsoService sso, C
             fromCache &= result.FromCache;
             stale |= result.IsStale;
         }
-        var data = JsonSerializer.SerializeToElement(items, JsonOptions);
-        var snapshot = new CharacterSnapshot(characterId, "assets", DateTimeOffset.UtcNow, data, fromCache, stale);
-        await SaveAsync(snapshot, cancellationToken);
-        return snapshot;
+        var assetData = JsonSerializer.SerializeToElement(items);
+        var snapshot = new CharacterSnapshot(characterId, "assets", DateTimeOffset.UtcNow, assetData, fromCache, stale);
+        await data.SaveAsync(snapshot, cancellationToken);
+        return await data.ReadAsync(characterId, "assets", new(Limit: 100000), cancellationToken);
     }
 
-    private async Task SaveAsync(CharacterSnapshot snapshot, CancellationToken cancellationToken)
-    {
-        var path = SnapshotPath(snapshot.CharacterId, snapshot.Kind);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temp = path + $".{Guid.NewGuid():N}.tmp";
-        await using (var stream = File.Create(temp)) await JsonSerializer.SerializeAsync(stream, snapshot, JsonOptions, cancellationToken);
-        File.Move(temp, path, true);
-    }
-
-    private string SnapshotPath(long characterId, string kind) => Path.Combine(_directory, characterId.ToString(), NormalizeKind(kind) + ".json");
     private static string NormalizeKind(string kind) => kind.ToLowerInvariant() switch
     {
         "location" or "assets" or "wallet" or "skills" => kind.ToLowerInvariant(),
