@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EdenToolkit.Cli/EdenToolkit.Cli.csproj" />
+    <Project Path="src/EdenToolkit.Core/EdenToolkit.Core.csproj" />
+    <Project Path="src/EdenToolkit.Mcp/EdenToolkit.Mcp.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/EdenToolkit.Tests/EdenToolkit.Tests.csproj" />
+  </Folder>
+</Solution>
