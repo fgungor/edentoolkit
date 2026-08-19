@@ -88,15 +88,26 @@ public sealed class CoreTests : IDisposable
               {"skill_id":3300,"active_skill_level":5,"trained_skill_level":5,"skillpoints_in_skill":2000},
               {"skill_id":3301,"active_skill_level":3,"trained_skill_level":3,"skillpoints_in_skill":1000}]}
             """, fetched));
+        await repository.SaveAsync(Snapshot(7, "transactions", """
+            [{"transaction_id":100,"date":"2026-08-18T10:00:00Z","type_id":34,"location_id":60003760,"quantity":1000,"unit_price":5.5,"is_buy":true,"client_id":99},
+             {"transaction_id":101,"date":"2026-08-19T10:00:00Z","type_id":35,"location_id":60003760,"quantity":50,"unit_price":9.0,"is_buy":false,"client_id":98}]
+            """, fetched));
+        await repository.SaveAsync(Snapshot(7, "jobs", """
+            [{"job_id":200,"activity_id":1,"blueprint_type_id":681,"product_type_id":165,"facility_id":60003760,"runs":10,"successful_runs":10,"status":"delivered","cost":123.4,"start_date":"2026-08-17T10:00:00Z","end_date":"2026-08-18T10:00:00Z","completed_date":"2026-08-18T11:00:00Z"}]
+            """, fetched));
 
         var location = await repository.ReadAsync(7, "location");
         var assets = await repository.ReadAsync(7, "assets", new(TypeId: 34));
         var skills = await repository.ReadAsync(7, "skills", new(MinimumSkillLevel: 5));
+        var purchases = await repository.ReadAsync(7, "transactions", new(IsBuy: true));
+        var jobs = await repository.ReadAsync(7, "jobs", new(TypeId: 165, Status: "delivered"));
 
         Assert.Equal(30000142, location.Data.GetProperty("solar_system_id").GetInt64());
         Assert.Equal(1, Assert.Single(assets.Data.EnumerateArray()).GetProperty("item_id").GetInt64());
         Assert.Equal(3300, Assert.Single(skills.Data.GetProperty("skills").EnumerateArray()).GetProperty("skill_id").GetInt64());
         Assert.Equal(3000, skills.Data.GetProperty("total_sp").GetInt64());
+        Assert.Equal(100, Assert.Single(purchases.Data.EnumerateArray()).GetProperty("transaction_id").GetInt64());
+        Assert.Equal(200, Assert.Single(jobs.Data.EnumerateArray()).GetProperty("job_id").GetInt64());
 
         await repository.DeleteCharacterAsync(7);
         await Assert.ThrowsAsync<FileNotFoundException>(() => repository.ReadAsync(7, "assets"));

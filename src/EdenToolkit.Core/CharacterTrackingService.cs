@@ -18,7 +18,9 @@ public sealed class CharacterTrackingService(EsiClient esi, EveSsoService sso, C
             await FetchAsync(characterId, "location", $"latest/characters/{characterId}/location/", token, refresh, cancellationToken),
             await FetchAssetsAsync(characterId, token, refresh, cancellationToken),
             await FetchAsync(characterId, "wallet", $"latest/characters/{characterId}/wallet/", token, refresh, cancellationToken),
-            await FetchAsync(characterId, "skills", $"latest/characters/{characterId}/skills/", token, refresh, cancellationToken)
+            await FetchAsync(characterId, "skills", $"latest/characters/{characterId}/skills/", token, refresh, cancellationToken),
+            await FetchTransactionsAsync(characterId, token, refresh, cancellationToken),
+            await FetchAsync(characterId, "jobs", $"latest/characters/{characterId}/industry/jobs/?include_completed=true", token, refresh, cancellationToken)
         };
         return new(characterId, DateTimeOffset.UtcNow, snapshots);
     }
@@ -57,9 +59,36 @@ public sealed class CharacterTrackingService(EsiClient esi, EveSsoService sso, C
         return await data.ReadAsync(characterId, "assets", new(Limit: 100000), cancellationToken);
     }
 
+    private async Task<CharacterSnapshot> FetchTransactionsAsync(long characterId, string token, bool refresh,
+        CancellationToken cancellationToken)
+    {
+        var items = new List<JsonElement>();
+        long? fromId = null;
+        var fromCache = true;
+        var stale = false;
+        while (true)
+        {
+            var suffix = fromId is null ? string.Empty : $"?from_id={fromId.Value}";
+            var result = await esi.GetAuthorizedAsync($"latest/characters/{characterId}/wallet/transactions/{suffix}",
+                token, characterId, refresh, cancellationToken);
+            var page = result.Data.EnumerateArray().Select(item => item.Clone()).ToArray();
+            items.AddRange(page);
+            fromCache &= result.FromCache;
+            stale |= result.IsStale;
+            if (page.Length < 2500) break;
+            var next = page.Min(item => item.GetProperty("transaction_id").GetInt64());
+            if (fromId == next) break;
+            fromId = next;
+        }
+        var snapshot = new CharacterSnapshot(characterId, "transactions", DateTimeOffset.UtcNow,
+            JsonSerializer.SerializeToElement(items), fromCache, stale);
+        await data.SaveAsync(snapshot, cancellationToken);
+        return await data.ReadAsync(characterId, "transactions", new(Limit: 100000), cancellationToken);
+    }
+
     private static string NormalizeKind(string kind) => kind.ToLowerInvariant() switch
     {
-        "location" or "assets" or "wallet" or "skills" => kind.ToLowerInvariant(),
-        _ => throw new ArgumentException("Data kind must be location, assets, wallet, or skills.", nameof(kind))
+        "location" or "assets" or "wallet" or "skills" or "transactions" or "jobs" => kind.ToLowerInvariant(),
+        _ => throw new ArgumentException("Data kind must be location, assets, wallet, skills, transactions, or jobs.", nameof(kind))
     };
 }

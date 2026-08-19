@@ -53,15 +53,22 @@ eden character show <character-id> location
 eden character show <character-id> assets
 eden character show <character-id> wallet
 eden character show <character-id> skills
+eden character show <character-id> transactions
+eden character show <character-id> jobs
 eden character query <character-id> assets --type-id 34 --limit 100
 eden character query <character-id> assets --location-id 60003760
 eden character query <character-id> skills --min-level 5
+eden character query <character-id> transactions --side buy --type-id 34
+eden character query <character-id> transactions --from 2026-08-01 --to 2026-08-31
+eden character query <character-id> jobs --status delivered --type-id 165
 eden character remove <character-id>
 ```
 
-Synced character data is stored in `%LOCALAPPDATA%/EdenToolkit/characters.db`. Location and wallet responses are stored as complete JSON values. Assets and skills are transactionally decomposed into indexed SQLite rows while retaining each complete ESI object as raw JSON. Commands read the committed database state rather than returning the live response directly. Re-syncing an aspect atomically replaces its previous rows, so readers never observe a partial asset or skill refresh.
+Synced character data is stored in `%LOCALAPPDATA%/EdenToolkit/characters.db`. Location and wallet responses are stored as complete JSON values. Assets and skills are transactionally decomposed into indexed SQLite rows while retaining each complete ESI object as raw JSON. Wallet transactions and industry jobs are keyed by their permanent ESI IDs and upserted, preserving previously synchronized history. Commands read the committed database state rather than returning the live response directly.
 
-The authorization requests only `esi-location.read_location.v1`, `esi-assets.read_assets.v1`, `esi-wallet.read_character_wallet.v1`, and `esi-skills.read_skills.v1`. JWT signatures, issuers, audiences, expiration, character subjects, and granted scopes are validated. Refresh-token rotation is honored. On Windows, refresh tokens are encrypted with DPAPI for the current OS user; on other systems the character file is restricted to the current user but relies on filesystem protection.
+The authorization requests `esi-location.read_location.v1`, `esi-assets.read_assets.v1`, `esi-wallet.read_character_wallet.v1`, `esi-skills.read_skills.v1`, and `esi-industry.read_character_jobs.v1`. JWT signatures, issuers, audiences, expiration, character subjects, and granted scopes are validated. Refresh-token rotation is honored. On Windows, refresh tokens are encrypted with DPAPI for the current OS user; on other systems the character file is restricted to the current user but relies on filesystem protection.
+
+Characters authorized before the industry-jobs scope was added must be authorized again with `eden character add`; selecting the same character replaces its stored grant.
 
 The distributed CLI uses EdenToolkit's registered public client ID by default. Forks and alternate registrations can override it with `--client-id` or `EDEN_EVE_CLIENT_ID`. PKCE does not embed or require a client secret.
 

@@ -6,10 +6,10 @@ return await MainAsync(args);
 static async Task<int> MainAsync(string[] args)
 {
     var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
-    using var services = new EdenServices();
     try
     {
         if (args is [] or ["help"] or ["--help"] or ["-h"]) { PrintHelp(); return 0; }
+        using var services = new EdenServices();
         object output = args switch
         {
             ["esi", "get", var path, .. var rest] => await GetEsiAsync(services, path, rest.Contains("--refresh")),
@@ -72,10 +72,22 @@ static CharacterDataQuery GetCharacterQuery(string[] args) => new(
     Offset: GetIntOption(args, "--offset") ?? 0,
     TypeId: GetLongOption(args, "--type-id"),
     LocationId: GetLongOption(args, "--location-id"),
-    MinimumSkillLevel: GetIntOption(args, "--min-level"));
+    MinimumSkillLevel: GetIntOption(args, "--min-level"),
+    IsBuy: GetSide(args),
+    Status: GetOption(args, "--status"),
+    From: GetDateOption(args, "--from"),
+    To: GetDateOption(args, "--to"));
 
 static int? GetIntOption(string[] args, string name) => int.TryParse(GetOption(args, name), out var value) ? value : null;
 static long? GetLongOption(string[] args, string name) => long.TryParse(GetOption(args, name), out var value) ? value : null;
+static DateTimeOffset? GetDateOption(string[] args, string name) => DateTimeOffset.TryParse(GetOption(args, name), out var value) ? value : null;
+static bool? GetSide(string[] args) => GetOption(args, "--side")?.ToLowerInvariant() switch
+{
+    "buy" => true,
+    "sell" => false,
+    null => null,
+    _ => throw new ArgumentException("--side must be 'buy' or 'sell'.")
+};
 
 static async Task<object> GetEsiAsync(EdenServices services, string path, bool refresh)
 {
@@ -103,9 +115,10 @@ Usage:
   eden character list
   eden character remove <character-id>
   eden character sync <character-id|all> [--refresh]
-  eden character show <character-id> <location|assets|wallet|skills>
+  eden character show <character-id> <location|assets|wallet|skills|transactions|jobs>
   eden character query <character-id> <aspect> [--limit N] [--offset N]
                        [--type-id ID] [--location-id ID] [--min-level N]
+                       [--side buy|sell] [--status STATUS] [--from DATE] [--to DATE]
 
 Environment:
   EDEN_CACHE_DIR                 Override the local cache directory

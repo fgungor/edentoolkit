@@ -14,7 +14,8 @@ public sealed class EveSsoService(HttpClient httpClient, EdenOptions options, Ch
     public static readonly string[] TrackingScopes =
     [
         "esi-location.read_location.v1", "esi-assets.read_assets.v1",
-        "esi-wallet.read_character_wallet.v1", "esi-skills.read_skills.v1"
+        "esi-wallet.read_character_wallet.v1", "esi-skills.read_skills.v1",
+        "esi-industry.read_character_jobs.v1"
     ];
     private static readonly Uri MetadataUri = new("https://login.eveonline.com/.well-known/oauth-authorization-server");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);

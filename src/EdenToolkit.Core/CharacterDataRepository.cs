@@ -6,7 +6,8 @@ using Microsoft.Data.Sqlite;
 namespace EdenToolkit.Core;
 
 public sealed record CharacterDataQuery(int Limit = 1000, int Offset = 0, long? TypeId = null,
-    long? LocationId = null, int? MinimumSkillLevel = null);
+    long? LocationId = null, int? MinimumSkillLevel = null, bool? IsBuy = null, string? Status = null,
+    DateTimeOffset? From = null, DateTimeOffset? To = null);
 
 public sealed class CharacterDataRepository
 {
@@ -48,6 +49,12 @@ public sealed class CharacterDataRepository
             case "skills":
                 await ReplaceSkillsAsync(connection, transaction, snapshot, cancellationToken);
                 break;
+            case "transactions":
+                await UpsertTransactionsAsync(connection, transaction, snapshot, cancellationToken);
+                break;
+            case "jobs":
+                await UpsertJobsAsync(connection, transaction, snapshot, cancellationToken);
+                break;
             default: throw new ArgumentException($"Unsupported character data aspect '{snapshot.Kind}'.");
         }
         await transaction.CommitAsync(cancellationToken);
@@ -68,7 +75,9 @@ public sealed class CharacterDataRepository
             "wallet" => await ReadSingletonAsync(connection, "character_wallets", characterId, cancellationToken),
             "assets" => await ReadAssetsAsync(connection, characterId, query, cancellationToken),
             "skills" => await ReadSkillsAsync(connection, characterId, query, cancellationToken),
-            _ => throw new ArgumentException("Data aspect must be location, assets, wallet, or skills.", nameof(aspect))
+            "transactions" => await ReadTransactionsAsync(connection, characterId, query, cancellationToken),
+            "jobs" => await ReadJobsAsync(connection, characterId, query, cancellationToken),
+            _ => throw new ArgumentException("Data aspect must be location, assets, wallet, skills, transactions, or jobs.", nameof(aspect))
         };
         return new(characterId, aspect, state.FetchedAt, data, state.FromCache, state.IsStale);
     }
@@ -78,7 +87,7 @@ public sealed class CharacterDataRepository
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        foreach (var table in new[] { "character_assets", "character_skills", "character_skill_summaries", "character_locations", "character_wallets", "sync_state" })
+        foreach (var table in new[] { "character_assets", "character_skills", "character_skill_summaries", "wallet_transactions", "industry_jobs", "character_locations", "character_wallets", "sync_state" })
             await ExecuteAsync(connection, transaction, $"DELETE FROM {table} WHERE character_id=$character;", cancellationToken, ("$character", characterId));
         await transaction.CommitAsync(cancellationToken);
     }
@@ -113,7 +122,23 @@ public sealed class CharacterDataRepository
               trained_level INTEGER NOT NULL, skillpoints INTEGER NOT NULL, raw_json TEXT NOT NULL,
               PRIMARY KEY(character_id, skill_id));
             CREATE INDEX IF NOT EXISTS ix_skills_character_level ON character_skills(character_id, trained_level);
-            PRAGMA user_version=1;
+            CREATE TABLE IF NOT EXISTS wallet_transactions (
+              character_id INTEGER NOT NULL, transaction_id INTEGER NOT NULL, occurred_at TEXT NOT NULL,
+              type_id INTEGER NOT NULL, location_id INTEGER NOT NULL, quantity INTEGER NOT NULL,
+              unit_price REAL NOT NULL, is_buy INTEGER NOT NULL, client_id INTEGER NOT NULL, raw_json TEXT NOT NULL,
+              PRIMARY KEY(character_id, transaction_id));
+            CREATE INDEX IF NOT EXISTS ix_transactions_character_date ON wallet_transactions(character_id, occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_transactions_character_type ON wallet_transactions(character_id, type_id);
+            CREATE TABLE IF NOT EXISTS industry_jobs (
+              character_id INTEGER NOT NULL, job_id INTEGER NOT NULL, activity_id INTEGER NOT NULL,
+              blueprint_type_id INTEGER NOT NULL, product_type_id INTEGER, facility_id INTEGER NOT NULL,
+              runs INTEGER NOT NULL, successful_runs INTEGER, status TEXT NOT NULL, cost REAL,
+              start_date TEXT NOT NULL, end_date TEXT NOT NULL, completed_date TEXT, raw_json TEXT NOT NULL,
+              PRIMARY KEY(character_id, job_id));
+            CREATE INDEX IF NOT EXISTS ix_jobs_character_status ON industry_jobs(character_id, status);
+            CREATE INDEX IF NOT EXISTS ix_jobs_character_product ON industry_jobs(character_id, product_type_id);
+            CREATE INDEX IF NOT EXISTS ix_jobs_character_start ON industry_jobs(character_id, start_date DESC);
+            PRAGMA user_version=2;
             """;
         command.ExecuteNonQuery();
     }
@@ -155,6 +180,44 @@ public sealed class CharacterDataRepository
                 """, cancellationToken, ("$character", snapshot.CharacterId), ("$skill", GetInt64(skill, "skill_id")),
                 ("$active", GetInt64(skill, "active_skill_level")), ("$trained", GetInt64(skill, "trained_skill_level")),
                 ("$points", GetInt64(skill, "skillpoints_in_skill")), ("$json", skill.GetRawText()));
+    }
+
+    private static async Task UpsertTransactionsAsync(SqliteConnection connection, SqliteTransaction transaction,
+        CharacterSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        foreach (var item in snapshot.Data.EnumerateArray())
+            await ExecuteAsync(connection, transaction, """
+                INSERT INTO wallet_transactions(character_id,transaction_id,occurred_at,type_id,location_id,quantity,unit_price,is_buy,client_id,raw_json)
+                VALUES($character,$transaction,$date,$type,$location,$quantity,$price,$buy,$client,$json)
+                ON CONFLICT(character_id,transaction_id) DO UPDATE SET occurred_at=excluded.occurred_at,type_id=excluded.type_id,
+                  location_id=excluded.location_id,quantity=excluded.quantity,unit_price=excluded.unit_price,is_buy=excluded.is_buy,
+                  client_id=excluded.client_id,raw_json=excluded.raw_json;
+                """, cancellationToken, ("$character", snapshot.CharacterId), ("$transaction", GetInt64(item, "transaction_id")),
+                ("$date", GetString(item, "date")), ("$type", GetInt64(item, "type_id")),
+                ("$location", GetInt64(item, "location_id")), ("$quantity", GetInt64(item, "quantity")),
+                ("$price", GetDouble(item, "unit_price")), ("$buy", GetBoolean(item, "is_buy") ? 1 : 0),
+                ("$client", GetInt64(item, "client_id")), ("$json", item.GetRawText()));
+    }
+
+    private static async Task UpsertJobsAsync(SqliteConnection connection, SqliteTransaction transaction,
+        CharacterSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        foreach (var item in snapshot.Data.EnumerateArray())
+            await ExecuteAsync(connection, transaction, """
+                INSERT INTO industry_jobs(character_id,job_id,activity_id,blueprint_type_id,product_type_id,facility_id,runs,
+                  successful_runs,status,cost,start_date,end_date,completed_date,raw_json)
+                VALUES($character,$job,$activity,$blueprint,$product,$facility,$runs,$successful,$status,$cost,$start,$end,$completed,$json)
+                ON CONFLICT(character_id,job_id) DO UPDATE SET activity_id=excluded.activity_id,blueprint_type_id=excluded.blueprint_type_id,
+                  product_type_id=excluded.product_type_id,facility_id=excluded.facility_id,runs=excluded.runs,
+                  successful_runs=excluded.successful_runs,status=excluded.status,cost=excluded.cost,start_date=excluded.start_date,
+                  end_date=excluded.end_date,completed_date=excluded.completed_date,raw_json=excluded.raw_json;
+                """, cancellationToken, ("$character", snapshot.CharacterId), ("$job", GetInt64(item, "job_id")),
+                ("$activity", GetInt64(item, "activity_id")), ("$blueprint", GetInt64(item, "blueprint_type_id")),
+                ("$product", GetNullableInt64(item, "product_type_id")), ("$facility", GetInt64(item, "facility_id")),
+                ("$runs", GetInt64(item, "runs")), ("$successful", GetNullableInt64(item, "successful_runs")),
+                ("$status", GetString(item, "status")), ("$cost", GetNullableDouble(item, "cost")),
+                ("$start", GetString(item, "start_date")), ("$end", GetString(item, "end_date")),
+                ("$completed", GetString(item, "completed_date")), ("$json", item.GetRawText()));
     }
 
     private static async Task<JsonElement> ReadSingletonAsync(SqliteConnection connection, string table, long characterId,
@@ -205,6 +268,47 @@ public sealed class CharacterDataRepository
         return JsonSerializer.SerializeToElement(summary);
     }
 
+    private static async Task<JsonElement> ReadTransactionsAsync(SqliteConnection connection, long characterId,
+        CharacterDataQuery query, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT raw_json FROM wallet_transactions
+            WHERE character_id=$character AND ($type IS NULL OR type_id=$type) AND ($location IS NULL OR location_id=$location)
+              AND ($buy IS NULL OR is_buy=$buy) AND ($from IS NULL OR occurred_at >= $from) AND ($to IS NULL OR occurred_at <= $to)
+            ORDER BY occurred_at DESC, transaction_id DESC LIMIT $limit OFFSET $offset;
+            """;
+        AddHistoryParameters(command, characterId, query);
+        command.Parameters.AddWithValue("$buy", query.IsBuy is null ? DBNull.Value : query.IsBuy.Value ? 1 : 0);
+        return JsonSerializer.SerializeToElement((await ReadJsonRowsAsync(command, cancellationToken)).Select(Parse).ToArray());
+    }
+
+    private static async Task<JsonElement> ReadJobsAsync(SqliteConnection connection, long characterId, CharacterDataQuery query,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT raw_json FROM industry_jobs
+            WHERE character_id=$character AND ($type IS NULL OR product_type_id=$type OR blueprint_type_id=$type)
+              AND ($status IS NULL OR status=$status) AND ($from IS NULL OR start_date >= $from) AND ($to IS NULL OR start_date <= $to)
+            ORDER BY start_date DESC, job_id DESC LIMIT $limit OFFSET $offset;
+            """;
+        AddHistoryParameters(command, characterId, query);
+        command.Parameters.AddWithValue("$status", (object?)query.Status ?? DBNull.Value);
+        return JsonSerializer.SerializeToElement((await ReadJsonRowsAsync(command, cancellationToken)).Select(Parse).ToArray());
+    }
+
+    private static void AddHistoryParameters(SqliteCommand command, long characterId, CharacterDataQuery query)
+    {
+        command.Parameters.AddWithValue("$character", characterId);
+        command.Parameters.AddWithValue("$type", (object?)query.TypeId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$location", (object?)query.LocationId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$from", query.From?.ToString("O", CultureInfo.InvariantCulture) ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$to", query.To?.ToString("O", CultureInfo.InvariantCulture) ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$limit", query.Limit);
+        command.Parameters.AddWithValue("$offset", query.Offset);
+    }
+
     private static async Task<(DateTimeOffset FetchedAt, bool FromCache, bool IsStale)?> ReadStateAsync(SqliteConnection connection,
         long characterId, string aspect, CancellationToken cancellationToken)
     {
@@ -241,6 +345,9 @@ public sealed class CharacterDataRepository
 
     private static JsonElement Parse(string json) { using var document = JsonDocument.Parse(json); return document.RootElement.Clone(); }
     private static long GetInt64(JsonElement value, string name) => value.TryGetProperty(name, out var property) ? property.GetInt64() : 0;
+    private static long? GetNullableInt64(JsonElement value, string name) => value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Number ? property.GetInt64() : null;
+    private static double GetDouble(JsonElement value, string name) => value.TryGetProperty(name, out var property) ? property.GetDouble() : 0;
+    private static double? GetNullableDouble(JsonElement value, string name) => value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.Number ? property.GetDouble() : null;
     private static string? GetString(JsonElement value, string name) => value.TryGetProperty(name, out var property) ? property.GetString() : null;
     private static bool GetBoolean(JsonElement value, string name) => value.TryGetProperty(name, out var property) && property.GetBoolean();
 }
