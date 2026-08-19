@@ -24,6 +24,30 @@ public sealed class CharacterStore(EdenOptions options)
         return found is null ? null : ToPublic(found);
     }
 
+    public async Task<TrackedCharacter> ResolveAsync(string reference, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reference);
+        reference = reference.Trim();
+        var characters = await ListAsync(cancellationToken);
+
+        if (long.TryParse(reference, out var characterId))
+            return characters.FirstOrDefault(character => character.CharacterId == characterId)
+                ?? throw new KeyNotFoundException($"Character {characterId} is not tracked.");
+
+        var exact = characters.Where(character =>
+            string.Equals(character.Name, reference, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (exact.Length == 1) return exact[0];
+
+        var firstNameMatches = characters.Where(character =>
+            string.Equals(character.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(), reference,
+                StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (firstNameMatches.Length == 1) return firstNameMatches[0];
+        if (firstNameMatches.Length > 1)
+            throw new ArgumentException($"Character first name '{reference}' is ambiguous: {string.Join(", ", firstNameMatches.Select(character => character.Name))}. Use the full name or ID.");
+
+        throw new KeyNotFoundException($"No tracked character matches '{reference}'. Run 'eden character list' to see tracked characters.");
+    }
+
     internal async Task<(TrackedCharacter Character, string RefreshToken)?> GetCredentialsAsync(long characterId,
         CancellationToken cancellationToken = default)
     {

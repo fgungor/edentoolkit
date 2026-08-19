@@ -51,6 +51,37 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public async Task CharacterStore_ResolvesIdFullNameAndUniqueFirstName()
+    {
+        Directory.CreateDirectory(_temp);
+        await File.WriteAllTextAsync(Path.Combine(_temp, "characters.json"), """
+            [{"characterId":7,"name":"Alice Example","clientId":"client","redirectUri":"http://localhost/","scopes":[],"addedAt":"2026-08-19T00:00:00Z","protectedRefreshToken":""},
+             {"characterId":8,"name":"Bob Example","clientId":"client","redirectUri":"http://localhost/","scopes":[],"addedAt":"2026-08-19T00:00:00Z","protectedRefreshToken":""}]
+            """);
+        var store = new CharacterStore(new EdenOptions { CacheDirectory = _temp });
+
+        Assert.Equal(7, (await store.ResolveAsync("7")).CharacterId);
+        Assert.Equal(7, (await store.ResolveAsync("alice example")).CharacterId);
+        Assert.Equal(7, (await store.ResolveAsync("ALICE")).CharacterId);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => store.ResolveAsync("Carol"));
+    }
+
+    [Fact]
+    public async Task CharacterStore_RejectsAmbiguousFirstName()
+    {
+        Directory.CreateDirectory(_temp);
+        await File.WriteAllTextAsync(Path.Combine(_temp, "characters.json"), """
+            [{"characterId":7,"name":"Alice One","clientId":"client","redirectUri":"http://localhost/","scopes":[],"addedAt":"2026-08-19T00:00:00Z","protectedRefreshToken":""},
+             {"characterId":8,"name":"Alice Two","clientId":"client","redirectUri":"http://localhost/","scopes":[],"addedAt":"2026-08-19T00:00:00Z","protectedRefreshToken":""}]
+            """);
+        var store = new CharacterStore(new EdenOptions { CacheDirectory = _temp });
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => store.ResolveAsync("Alice"));
+        Assert.Contains("Alice One", error.Message);
+        Assert.Contains("Alice Two", error.Message);
+    }
+
+    [Fact]
     public async Task SdeUpdate_BuildsEnglishNameIndex()
     {
         var zip = MakeZip(("agentTypes.jsonl", "{\"_key\":1,\"name\":\"NonAgent\"}\n"),

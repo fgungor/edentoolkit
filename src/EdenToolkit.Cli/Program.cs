@@ -20,12 +20,12 @@ static async Task<int> MainAsync(string[] args)
             ["name", "search", var query, .. var rest] => await services.Sde.SearchAsync(query, GetLimit(rest)),
             ["character", "add", .. var rest] => await AddCharacterAsync(services, rest),
             ["character", "list"] => await services.Characters.ListAsync(),
-            ["character", "remove", var id] when long.TryParse(id, out var parsed) => await RemoveCharacterAsync(services, parsed),
+            ["character", "remove", var character] => await RemoveCharacterAsync(services, (await services.Characters.ResolveAsync(character)).CharacterId),
             ["character", "sync", "all", .. var rest] => await SyncAllAsync(services, rest.Contains("--refresh")),
-            ["character", "sync", var id, .. var rest] when long.TryParse(id, out var parsed) => await services.Tracking.SyncAsync(parsed, rest.Contains("--refresh")),
-            ["character", "show", var id, var kind] when long.TryParse(id, out var parsed) => await services.Tracking.ReadAsync(parsed, kind),
-            ["character", "query", var id, var kind, .. var rest] when long.TryParse(id, out var parsed) =>
-                await services.Tracking.QueryAsync(parsed, kind, GetCharacterQuery(rest)),
+            ["character", "sync", var character, .. var rest] => await services.Tracking.SyncAsync((await services.Characters.ResolveAsync(character)).CharacterId, rest.Contains("--refresh")),
+            ["character", "show", var character, var kind] => await services.Tracking.ReadAsync((await services.Characters.ResolveAsync(character)).CharacterId, kind),
+            ["character", "query", var character, var kind, .. var rest] =>
+                await services.Tracking.QueryAsync((await services.Characters.ResolveAsync(character)).CharacterId, kind, GetCharacterQuery(rest)),
             ["market", "quote", var item, .. var rest] => await services.Market.GetQuoteAsync(item,
                 GetOption(rest, "--hub") ?? "Hek", GetIntOption(rest, "--days") ?? 30, rest.Contains("--refresh")),
             ["market", "compare", var item, .. var rest] => await services.Market.CompareHubsAsync(item,
@@ -70,8 +70,8 @@ static async Task<object> RemoveCharacterAsync(EdenServices services, long chara
 static async Task<InventoryValuation> ValueInventoryAsync(EdenServices services, string[] args)
 {
     long characterId;
-    if (args.FirstOrDefault(value => !value.StartsWith("--", StringComparison.Ordinal)) is { } candidate && long.TryParse(candidate, out var parsed))
-        characterId = parsed;
+    if (args.FirstOrDefault() is { } candidate && !candidate.StartsWith("--", StringComparison.Ordinal))
+        characterId = (await services.Characters.ResolveAsync(candidate)).CharacterId;
     else
     {
         var characters = await services.Characters.ListAsync();
@@ -134,15 +134,15 @@ Usage:
   eden name search <text> [--limit <1-100>]
   eden character add [--client-id <id>] [--redirect-uri <uri>] [--no-browser]
   eden character list
-  eden character remove <character-id>
-  eden character sync <character-id|all> [--refresh]
-  eden character show <character-id> <location|assets|wallet|skills|transactions|jobs|journal|orders|order-history>
-  eden character query <character-id> <aspect> [--limit N] [--offset N]
+  eden character remove <character-name-or-id>
+  eden character sync <character-name-or-id|all> [--refresh]
+  eden character show <character-name-or-id> <location|assets|wallet|skills|transactions|jobs|journal|orders|order-history>
+  eden character query <character-name-or-id> <aspect> [--limit N] [--offset N]
                        [--type-id ID] [--location-id ID] [--min-level N]
                        [--side buy|sell] [--status STATUS] [--from DATE] [--to DATE]
   eden market quote <item-name-or-type-id> [--hub Hek|Jita|Dodixie|Amarr] [--days N] [--refresh]
   eden market compare <item-name-or-type-id> [--hubs Hek,Jita,Dodixie,Amarr] [--days N]
-  eden inventory value [character-id] [--hub Hek|Jita|Dodixie|Amarr] [--location-id ID]
+  eden inventory value [character-name-or-id] [--hub Hek|Jita|Dodixie|Amarr] [--location-id ID]
                        [--valuation best-buy|best-sell|depth-buy|depth-sell]
 
 Environment:
