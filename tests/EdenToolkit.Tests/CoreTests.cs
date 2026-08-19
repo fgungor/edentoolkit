@@ -53,7 +53,8 @@ public sealed class CoreTests : IDisposable
     [Fact]
     public async Task SdeUpdate_BuildsEnglishNameIndex()
     {
-        var zip = MakeZip(("types.jsonl", "{\"_key\":34,\"name\":{\"en\":\"Tritanium\",\"de\":\"Tritanium\"}}\n"),
+        var zip = MakeZip(("agentTypes.jsonl", "{\"_key\":1,\"name\":\"NonAgent\"}\n"),
+            ("types.jsonl", "{\"_key\":34,\"name\":{\"en\":\"Tritanium\",\"de\":\"Tritanium\"}}\n"),
             ("mapSolarSystems.jsonl", "{\"_key\":30000142,\"name\":{\"en\":\"Jita\"}}\n"));
         var handler = new StubHandler(_ =>
         {
@@ -95,12 +96,20 @@ public sealed class CoreTests : IDisposable
         await repository.SaveAsync(Snapshot(7, "jobs", """
             [{"job_id":200,"activity_id":1,"blueprint_type_id":681,"product_type_id":165,"facility_id":60003760,"runs":10,"successful_runs":10,"status":"delivered","cost":123.4,"start_date":"2026-08-17T10:00:00Z","end_date":"2026-08-18T10:00:00Z","completed_date":"2026-08-18T11:00:00Z"}]
             """, fetched));
+        await repository.SaveAsync(Snapshot(7, "journal", """
+            [{"id":300,"date":"2026-08-19T11:00:00Z","ref_type":"market_transaction","amount":500,"balance":10000}]
+            """, fetched));
+        await repository.SaveAsync(Snapshot(7, "orders", """
+            [{"order_id":400,"type_id":34,"location_id":60005686,"is_buy_order":false,"price":120,"volume_remain":5,"volume_total":10,"issued":"2026-08-19T12:00:00Z"}]
+            """, fetched));
 
         var location = await repository.ReadAsync(7, "location");
         var assets = await repository.ReadAsync(7, "assets", new(TypeId: 34));
         var skills = await repository.ReadAsync(7, "skills", new(MinimumSkillLevel: 5));
         var purchases = await repository.ReadAsync(7, "transactions", new(IsBuy: true));
         var jobs = await repository.ReadAsync(7, "jobs", new(TypeId: 165, Status: "delivered"));
+        var journal = await repository.ReadAsync(7, "journal", new(Status: "market_transaction"));
+        var orders = await repository.ReadAsync(7, "orders", new(TypeId: 34, IsBuy: false));
 
         Assert.Equal(30000142, location.Data.GetProperty("solar_system_id").GetInt64());
         Assert.Equal(1, Assert.Single(assets.Data.EnumerateArray()).GetProperty("item_id").GetInt64());
@@ -108,9 +117,63 @@ public sealed class CoreTests : IDisposable
         Assert.Equal(3000, skills.Data.GetProperty("total_sp").GetInt64());
         Assert.Equal(100, Assert.Single(purchases.Data.EnumerateArray()).GetProperty("transaction_id").GetInt64());
         Assert.Equal(200, Assert.Single(jobs.Data.EnumerateArray()).GetProperty("job_id").GetInt64());
+        Assert.Equal(300, Assert.Single(journal.Data.EnumerateArray()).GetProperty("id").GetInt64());
+        Assert.Equal(400, Assert.Single(orders.Data.EnumerateArray()).GetProperty("order_id").GetInt64());
 
         await repository.DeleteCharacterAsync(7);
         await Assert.ThrowsAsync<FileNotFoundException>(() => repository.ReadAsync(7, "assets"));
+    }
+
+    [Fact]
+    public async Task MarketDataService_ComputesHubDepthAndHistoryWithoutPersistingOrders()
+    {
+        var zip = MakeZip(("types.jsonl", "{\"_key\":34,\"name\":{\"en\":\"Tritanium\"}}\n"));
+        var handler = new StubHandler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("latest.zip", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(zip) };
+            if (path.Contains("/orders/", StringComparison.Ordinal))
+            {
+                var response = Response(HttpStatusCode.OK, """
+                    [{"is_buy_order":true,"location_id":60005686,"price":100,"volume_remain":5},
+                     {"is_buy_order":true,"location_id":60005686,"price":90,"volume_remain":95},
+                     {"is_buy_order":false,"location_id":60005686,"price":120,"volume_remain":5},
+                     {"is_buy_order":false,"location_id":60005686,"price":130,"volume_remain":95},
+                     {"is_buy_order":false,"location_id":999,"price":1,"volume_remain":1000}]
+                    """, TimeSpan.FromMinutes(5));
+                response.Headers.Add("X-Pages", "1");
+                return response;
+            }
+            if (path.Contains("/history/", StringComparison.Ordinal))
+                return Response(HttpStatusCode.OK, """
+                    [{"date":"2026-08-18","average":105,"highest":125,"lowest":85,"volume":1000,"order_count":20},
+                     {"date":"2026-08-19","average":115,"highest":135,"lowest":95,"volume":2000,"order_count":30}]
+                    """, TimeSpan.FromHours(1));
+            throw new InvalidOperationException(request.RequestUri.ToString());
+        });
+        using var services = CreateServices(handler);
+        await services.Sde.UpdateAsync();
+
+        var analysis = await services.Market.GetQuoteAsync("Tritanium", "Hek", 30);
+        var persisted = await new MarketDataRepository(services.Options).ReadQuoteAsync(34, "Hek");
+        await services.CharacterData.SaveAsync(Snapshot(7, "assets", """
+            [{"item_id":1,"type_id":34,"location_id":60005686,"location_type":"station","location_flag":"Hangar","quantity":10,"is_singleton":false}]
+            """, DateTimeOffset.UtcNow));
+        var inventory = await services.Inventory.ValueAsync(7, "Hek");
+
+        Assert.Equal(100m, analysis.Quote.BestBuy);
+        Assert.Equal(120m, analysis.Quote.BestSell);
+        Assert.Equal(100m, analysis.Quote.DepthBuy);
+        Assert.Equal(120m, analysis.Quote.DepthSell);
+        Assert.Equal(20m, analysis.Quote.SpreadPercent);
+        Assert.Equal(110m, analysis.History.AveragePrice);
+        Assert.Equal(1500m, analysis.History.AverageDailyVolume);
+        Assert.Equal(120m, persisted?.BestSell);
+        Assert.Equal(1000m, inventory.ImmediateLiquidationValue);
+        Assert.Equal(1200m, inventory.ReplacementValue);
+        Assert.Equal(new MarketHub("Dodixie", 60011866, 10000032), MarketDataService.Hubs["Dodixie"]);
+        Assert.Equal(new MarketHub("Amarr", 60008494, 10000043), MarketDataService.Hubs["Amarr"]);
     }
 
     private static CharacterSnapshot Snapshot(long characterId, string kind, string json, DateTimeOffset fetched)

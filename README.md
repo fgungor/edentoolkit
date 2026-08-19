@@ -35,6 +35,31 @@ The default cache is `%LOCALAPPDATA%/EdenToolkit`. Override it with `EDEN_CACHE_
 
 The generic `esi get` command remains limited to public endpoints; authenticated access is deliberately exposed through the character tracking commands below.
 
+## Market intelligence
+
+Install the SDE once so item names can be resolved, then request compact hub quotes:
+
+```powershell
+eden sde update
+eden market quote "Hobgoblin II" --hub Hek
+eden market quote 2456 --hub Jita --days 30
+eden market quote "Hobgoblin II" --hub Dodixie
+eden market quote "Hobgoblin II" --hub Amarr
+eden market compare "Hobgoblin II" --hubs Hek,Jita,Dodixie,Amarr
+```
+
+Quotes contain distinct best buy, best sell, depth buy, and depth sell values. Depth prices are volume-weighted across the best 5% of the station's relevant buy or sell volume. Regional daily history is retained in SQLite and summarized for the requested period. Raw public order books remain in the HTTP cache only and are not persisted in SQLite.
+
+Value previously synchronized character assets with an explicit market meaning:
+
+```powershell
+eden inventory value <character-id> --hub Hek --valuation depth-buy
+eden inventory value <character-id> --hub Jita --valuation depth-sell
+eden inventory value <character-id> --hub Hek --location-id 60005686
+```
+
+The result reports immediate liquidation value, replacement value, the selected valuation, and per-type values. A character ID may be omitted when exactly one character is tracked.
+
 ## Track characters
 
 Register a native application in the EVE Developers Portal and add this exact callback URL:
@@ -55,6 +80,9 @@ eden character show <character-id> wallet
 eden character show <character-id> skills
 eden character show <character-id> transactions
 eden character show <character-id> jobs
+eden character show <character-id> journal
+eden character show <character-id> orders
+eden character show <character-id> order-history
 eden character query <character-id> assets --type-id 34 --limit 100
 eden character query <character-id> assets --location-id 60003760
 eden character query <character-id> skills --min-level 5
@@ -64,9 +92,9 @@ eden character query <character-id> jobs --status delivered --type-id 165
 eden character remove <character-id>
 ```
 
-Synced character data is stored in `%LOCALAPPDATA%/EdenToolkit/characters.db`. Location and wallet responses are stored as complete JSON values. Assets and skills are transactionally decomposed into indexed SQLite rows while retaining each complete ESI object as raw JSON. Wallet transactions and industry jobs are keyed by their permanent ESI IDs and upserted, preserving previously synchronized history. Commands read the committed database state rather than returning the live response directly.
+Synced character data is stored in `%LOCALAPPDATA%/EdenToolkit/characters.db`. Location and wallet responses are stored as complete JSON values. Assets and skills are transactionally decomposed into indexed SQLite rows while retaining each complete ESI object as raw JSON. Wallet transactions, journal entries, industry jobs, and own market orders are keyed by their permanent ESI IDs and upserted, preserving previously synchronized history. Commands read the committed database state rather than returning the live response directly.
 
-The authorization requests `esi-location.read_location.v1`, `esi-assets.read_assets.v1`, `esi-wallet.read_character_wallet.v1`, `esi-skills.read_skills.v1`, and `esi-industry.read_character_jobs.v1`. JWT signatures, issuers, audiences, expiration, character subjects, and granted scopes are validated. Refresh-token rotation is honored. On Windows, refresh tokens are encrypted with DPAPI for the current OS user; on other systems the character file is restricted to the current user but relies on filesystem protection.
+The authorization requests `esi-location.read_location.v1`, `esi-assets.read_assets.v1`, `esi-wallet.read_character_wallet.v1`, `esi-skills.read_skills.v1`, `esi-industry.read_character_jobs.v1`, and `esi-markets.read_character_orders.v1`. JWT signatures, issuers, audiences, expiration, character subjects, and granted scopes are validated. Refresh-token rotation is honored. On Windows, refresh tokens are encrypted with DPAPI for the current OS user; on other systems the character file is restricted to the current user but relies on filesystem protection.
 
 Characters authorized before the industry-jobs scope was added must be authorized again with `eden character add`; selecting the same character replaces its stored grant.
 
@@ -84,6 +112,9 @@ After publishing, add a stdio server using `artifacts/eden-mcp/eden-mcp.exe`. It
 - `eve_search_names`
 - `eve_sync_character`
 - `eve_character_data`
+- `eve_market_quote`
+- `eve_compare_market_hubs`
+- `eve_value_inventory`
 
 All MCP logging goes to stderr so stdout remains a clean protocol stream.
 

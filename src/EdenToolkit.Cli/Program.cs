@@ -26,6 +26,12 @@ static async Task<int> MainAsync(string[] args)
             ["character", "show", var id, var kind] when long.TryParse(id, out var parsed) => await services.Tracking.ReadAsync(parsed, kind),
             ["character", "query", var id, var kind, .. var rest] when long.TryParse(id, out var parsed) =>
                 await services.Tracking.QueryAsync(parsed, kind, GetCharacterQuery(rest)),
+            ["market", "quote", var item, .. var rest] => await services.Market.GetQuoteAsync(item,
+                GetOption(rest, "--hub") ?? "Hek", GetIntOption(rest, "--days") ?? 30, rest.Contains("--refresh")),
+            ["market", "compare", var item, .. var rest] => await services.Market.CompareHubsAsync(item,
+                (GetOption(rest, "--hubs") ?? "Hek,Jita").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                GetIntOption(rest, "--days") ?? 30, rest.Contains("--refresh")),
+            ["inventory", "value", .. var rest] => await ValueInventoryAsync(services, rest),
             _ => throw new ArgumentException("Unknown or incomplete command. Run 'eden help'.")
         };
         Console.WriteLine(JsonSerializer.Serialize(output, jsonOptions));
@@ -59,6 +65,21 @@ static async Task<object> RemoveCharacterAsync(EdenServices services, long chara
     var removed = await services.Characters.RemoveAsync(characterId);
     await services.CharacterData.DeleteCharacterAsync(characterId);
     return new { characterId, removed, cachedDataPurged = true };
+}
+
+static async Task<InventoryValuation> ValueInventoryAsync(EdenServices services, string[] args)
+{
+    long characterId;
+    if (args.FirstOrDefault(value => !value.StartsWith("--", StringComparison.Ordinal)) is { } candidate && long.TryParse(candidate, out var parsed))
+        characterId = parsed;
+    else
+    {
+        var characters = await services.Characters.ListAsync();
+        characterId = characters.Count == 1 ? characters[0].CharacterId
+            : throw new ArgumentException("Specify a character ID when zero or multiple characters are tracked.");
+    }
+    return await services.Inventory.ValueAsync(characterId, GetOption(args, "--hub") ?? "Hek",
+        GetLongOption(args, "--location-id"), GetOption(args, "--valuation") ?? "depth-buy");
 }
 
 static string? GetOption(string[] args, string name)
@@ -115,10 +136,14 @@ Usage:
   eden character list
   eden character remove <character-id>
   eden character sync <character-id|all> [--refresh]
-  eden character show <character-id> <location|assets|wallet|skills|transactions|jobs>
+  eden character show <character-id> <location|assets|wallet|skills|transactions|jobs|journal|orders|order-history>
   eden character query <character-id> <aspect> [--limit N] [--offset N]
                        [--type-id ID] [--location-id ID] [--min-level N]
                        [--side buy|sell] [--status STATUS] [--from DATE] [--to DATE]
+  eden market quote <item-name-or-type-id> [--hub Hek|Jita|Dodixie|Amarr] [--days N] [--refresh]
+  eden market compare <item-name-or-type-id> [--hubs Hek,Jita,Dodixie,Amarr] [--days N]
+  eden inventory value [character-id] [--hub Hek|Jita|Dodixie|Amarr] [--location-id ID]
+                       [--valuation best-buy|best-sell|depth-buy|depth-sell]
 
 Environment:
   EDEN_CACHE_DIR                 Override the local cache directory
@@ -130,4 +155,5 @@ Environment:
 Examples:
   eden esi get "latest/markets/10000002/orders/?type_id=34&order_type=all&page=1"
   eden name search "Raven"
+  eden market quote "Hobgoblin II" --hub Hek
 """);

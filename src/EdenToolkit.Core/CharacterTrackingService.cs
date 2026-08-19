@@ -20,7 +20,10 @@ public sealed class CharacterTrackingService(EsiClient esi, EveSsoService sso, C
             await FetchAsync(characterId, "wallet", $"latest/characters/{characterId}/wallet/", token, refresh, cancellationToken),
             await FetchAsync(characterId, "skills", $"latest/characters/{characterId}/skills/", token, refresh, cancellationToken),
             await FetchTransactionsAsync(characterId, token, refresh, cancellationToken),
-            await FetchAsync(characterId, "jobs", $"latest/characters/{characterId}/industry/jobs/?include_completed=true", token, refresh, cancellationToken)
+            await FetchAsync(characterId, "jobs", $"latest/characters/{characterId}/industry/jobs/?include_completed=true", token, refresh, cancellationToken),
+            await FetchPagedAsync(characterId, "journal", $"latest/characters/{characterId}/wallet/journal/", token, refresh, cancellationToken),
+            await FetchPagedAsync(characterId, "orders", $"latest/characters/{characterId}/orders/", token, refresh, cancellationToken),
+            await FetchPagedAsync(characterId, "order-history", $"latest/characters/{characterId}/orders/history/", token, refresh, cancellationToken)
         };
         return new(characterId, DateTimeOffset.UtcNow, snapshots);
     }
@@ -86,9 +89,27 @@ public sealed class CharacterTrackingService(EsiClient esi, EveSsoService sso, C
         return await data.ReadAsync(characterId, "transactions", new(Limit: 100000), cancellationToken);
     }
 
+    private async Task<CharacterSnapshot> FetchPagedAsync(long characterId, string kind, string basePath, string token,
+        bool refresh, CancellationToken cancellationToken)
+    {
+        var first = await esi.GetAuthorizedAsync(basePath + "?page=1", token, characterId, refresh, cancellationToken);
+        var items = first.Data.EnumerateArray().Select(item => item.Clone()).ToList();
+        var fromCache = first.FromCache; var stale = first.IsStale;
+        for (var page = 2; page <= first.Pages; page++)
+        {
+            var result = await esi.GetAuthorizedAsync(basePath + $"?page={page}", token, characterId, refresh, cancellationToken);
+            items.AddRange(result.Data.EnumerateArray().Select(item => item.Clone()));
+            fromCache &= result.FromCache; stale |= result.IsStale;
+        }
+        var snapshot = new CharacterSnapshot(characterId, kind, DateTimeOffset.UtcNow,
+            JsonSerializer.SerializeToElement(items), fromCache, stale);
+        await data.SaveAsync(snapshot, cancellationToken);
+        return await data.ReadAsync(characterId, kind, new(Limit: 100000), cancellationToken);
+    }
+
     private static string NormalizeKind(string kind) => kind.ToLowerInvariant() switch
     {
-        "location" or "assets" or "wallet" or "skills" or "transactions" or "jobs" => kind.ToLowerInvariant(),
-        _ => throw new ArgumentException("Data kind must be location, assets, wallet, skills, transactions, or jobs.", nameof(kind))
+        "location" or "assets" or "wallet" or "skills" or "transactions" or "jobs" or "journal" or "orders" or "order-history" => kind.ToLowerInvariant(),
+        _ => throw new ArgumentException("Unsupported character data kind.", nameof(kind))
     };
 }

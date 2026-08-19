@@ -10,6 +10,8 @@ public sealed class EdenServices : IDisposable
     public EveSsoService Sso { get; }
     public CharacterTrackingService Tracking { get; }
     public CharacterDataRepository CharacterData { get; }
+    public MarketDataService Market { get; }
+    public InventoryService Inventory { get; }
 
     public EdenServices(EdenOptions? options = null, HttpMessageHandler? handler = null)
     {
@@ -23,6 +25,9 @@ public sealed class EdenServices : IDisposable
         Sso = new EveSsoService(_httpClient, Options, Characters);
         CharacterData = new CharacterDataRepository(Options);
         Tracking = new CharacterTrackingService(Esi, Sso, Characters, CharacterData);
+        var marketRepository = new MarketDataRepository(Options);
+        Market = new MarketDataService(Esi, Sde, marketRepository);
+        Inventory = new InventoryService(CharacterData, Market, Sde);
     }
 
     public void Dispose() => _httpClient.Dispose();

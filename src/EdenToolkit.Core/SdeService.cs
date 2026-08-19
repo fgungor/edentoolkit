@@ -8,6 +8,7 @@ public sealed record SdeName(long Id, string Name, string Kind);
 
 public sealed class SdeService(HttpClient httpClient, EdenOptions options)
 {
+    private const int CurrentIndexVersion = 2;
     private const string IndexFile = "names.json";
     private const string MetadataFile = "metadata.json";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = false };
@@ -25,8 +26,9 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
         var metadata = await ReadMetadataAsync(cancellationToken);
         using var request = new HttpRequestMessage(HttpMethod.Get, options.SdeUri);
         request.Headers.UserAgent.ParseAdd(options.UserAgent);
-        if (!force && metadata?.ETag is { } etag) request.Headers.TryAddWithoutValidation("If-None-Match", etag);
-        if (!force && metadata?.LastModified is { } modified) request.Headers.IfModifiedSince = modified;
+        var canRevalidate = !force && metadata?.IndexVersion == CurrentIndexVersion;
+        if (canRevalidate && metadata?.ETag is { } etag) request.Headers.TryAddWithoutValidation("If-None-Match", etag);
+        if (canRevalidate && metadata?.LastModified is { } modified) request.Headers.IfModifiedSince = modified;
 
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.StatusCode == System.Net.HttpStatusCode.NotModified && metadata is not null)
@@ -45,7 +47,7 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
             File.Move(indexTemp, Path.Combine(_directory, IndexFile), true);
 
             var newMetadata = new SdeMetadata(response.Headers.ETag?.ToString(), response.Content.Headers.LastModified,
-                DateTimeOffset.UtcNow, index.Count);
+                DateTimeOffset.UtcNow, index.Count, CurrentIndexVersion);
             await using var metadataStream = File.Create(Path.Combine(_directory, MetadataFile));
             await JsonSerializer.SerializeAsync(metadataStream, newMetadata, JsonOptions, cancellationToken);
             _index = index;
@@ -99,7 +101,8 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
         using var archive = ZipFile.OpenRead(zipPath);
         foreach (var desired in IndexedFiles)
         {
-            var entry = archive.Entries.FirstOrDefault(candidate => candidate.FullName.EndsWith(desired, StringComparison.OrdinalIgnoreCase));
+            var entry = archive.Entries.FirstOrDefault(candidate =>
+                Path.GetFileName(candidate.FullName).Equals(desired, StringComparison.OrdinalIgnoreCase));
             if (entry is null) continue;
             var kind = Path.GetFileNameWithoutExtension(desired);
             await using var stream = entry.Open();
@@ -149,5 +152,6 @@ public sealed class SdeService(HttpClient httpClient, EdenOptions options)
         }
     }
 
-    private sealed record SdeMetadata(string? ETag, DateTimeOffset? LastModified, DateTimeOffset UpdatedAt, int EntryCount);
+    private sealed record SdeMetadata(string? ETag, DateTimeOffset? LastModified, DateTimeOffset UpdatedAt, int EntryCount,
+        int IndexVersion = 0);
 }

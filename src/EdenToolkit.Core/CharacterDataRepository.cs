@@ -55,6 +55,12 @@ public sealed class CharacterDataRepository
             case "jobs":
                 await UpsertJobsAsync(connection, transaction, snapshot, cancellationToken);
                 break;
+            case "journal":
+                await UpsertJournalAsync(connection, transaction, snapshot, cancellationToken);
+                break;
+            case "orders" or "order-history":
+                await UpsertOrdersAsync(connection, transaction, snapshot, snapshot.Kind == "order-history", cancellationToken);
+                break;
             default: throw new ArgumentException($"Unsupported character data aspect '{snapshot.Kind}'.");
         }
         await transaction.CommitAsync(cancellationToken);
@@ -77,7 +83,10 @@ public sealed class CharacterDataRepository
             "skills" => await ReadSkillsAsync(connection, characterId, query, cancellationToken),
             "transactions" => await ReadTransactionsAsync(connection, characterId, query, cancellationToken),
             "jobs" => await ReadJobsAsync(connection, characterId, query, cancellationToken),
-            _ => throw new ArgumentException("Data aspect must be location, assets, wallet, skills, transactions, or jobs.", nameof(aspect))
+            "journal" => await ReadJournalAsync(connection, characterId, query, cancellationToken),
+            "orders" => await ReadOrdersAsync(connection, characterId, query, false, cancellationToken),
+            "order-history" => await ReadOrdersAsync(connection, characterId, query, true, cancellationToken),
+            _ => throw new ArgumentException("Unsupported character data aspect.", nameof(aspect))
         };
         return new(characterId, aspect, state.FetchedAt, data, state.FromCache, state.IsStale);
     }
@@ -87,7 +96,7 @@ public sealed class CharacterDataRepository
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        foreach (var table in new[] { "character_assets", "character_skills", "character_skill_summaries", "wallet_transactions", "industry_jobs", "character_locations", "character_wallets", "sync_state" })
+        foreach (var table in new[] { "character_assets", "character_skills", "character_skill_summaries", "wallet_transactions", "wallet_journal", "own_market_orders", "industry_jobs", "character_locations", "character_wallets", "sync_state" })
             await ExecuteAsync(connection, transaction, $"DELETE FROM {table} WHERE character_id=$character;", cancellationToken, ("$character", characterId));
         await transaction.CommitAsync(cancellationToken);
     }
@@ -138,7 +147,20 @@ public sealed class CharacterDataRepository
             CREATE INDEX IF NOT EXISTS ix_jobs_character_status ON industry_jobs(character_id, status);
             CREATE INDEX IF NOT EXISTS ix_jobs_character_product ON industry_jobs(character_id, product_type_id);
             CREATE INDEX IF NOT EXISTS ix_jobs_character_start ON industry_jobs(character_id, start_date DESC);
-            PRAGMA user_version=2;
+            CREATE TABLE IF NOT EXISTS wallet_journal (
+              character_id INTEGER NOT NULL, entry_id INTEGER NOT NULL, occurred_at TEXT NOT NULL,
+              ref_type TEXT NOT NULL, amount REAL, balance REAL, raw_json TEXT NOT NULL,
+              PRIMARY KEY(character_id,entry_id));
+            CREATE INDEX IF NOT EXISTS ix_journal_character_date ON wallet_journal(character_id,occurred_at DESC);
+            CREATE TABLE IF NOT EXISTS own_market_orders (
+              character_id INTEGER NOT NULL, order_id INTEGER NOT NULL, type_id INTEGER NOT NULL,
+              location_id INTEGER NOT NULL, is_buy INTEGER NOT NULL, price REAL NOT NULL,
+              volume_remain INTEGER NOT NULL, volume_total INTEGER NOT NULL, issued_at TEXT NOT NULL,
+              state TEXT, is_historical INTEGER NOT NULL, raw_json TEXT NOT NULL,
+              PRIMARY KEY(character_id,order_id));
+            CREATE INDEX IF NOT EXISTS ix_own_orders_character_history ON own_market_orders(character_id,is_historical,issued_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_own_orders_character_type ON own_market_orders(character_id,type_id);
+            PRAGMA user_version=4;
             """;
         command.ExecuteNonQuery();
     }
@@ -220,6 +242,43 @@ public sealed class CharacterDataRepository
                 ("$completed", GetString(item, "completed_date")), ("$json", item.GetRawText()));
     }
 
+    private static async Task UpsertJournalAsync(SqliteConnection connection, SqliteTransaction transaction,
+        CharacterSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        foreach (var item in snapshot.Data.EnumerateArray())
+            await ExecuteAsync(connection, transaction, """
+                INSERT INTO wallet_journal(character_id,entry_id,occurred_at,ref_type,amount,balance,raw_json)
+                VALUES($character,$id,$date,$type,$amount,$balance,$json)
+                ON CONFLICT(character_id,entry_id) DO UPDATE SET occurred_at=excluded.occurred_at,ref_type=excluded.ref_type,
+                  amount=excluded.amount,balance=excluded.balance,raw_json=excluded.raw_json;
+                """, cancellationToken, ("$character", snapshot.CharacterId), ("$id", GetInt64(item, "id")),
+                ("$date", GetString(item, "date")), ("$type", GetString(item, "ref_type")),
+                ("$amount", GetNullableDouble(item, "amount")), ("$balance", GetNullableDouble(item, "balance")),
+                ("$json", item.GetRawText()));
+    }
+
+    private static async Task UpsertOrdersAsync(SqliteConnection connection, SqliteTransaction transaction,
+        CharacterSnapshot snapshot, bool historical, CancellationToken cancellationToken)
+    {
+        if (!historical)
+            await ExecuteAsync(connection, transaction, "DELETE FROM own_market_orders WHERE character_id=$character AND is_historical=0;",
+                cancellationToken, ("$character", snapshot.CharacterId));
+        foreach (var item in snapshot.Data.EnumerateArray())
+            await ExecuteAsync(connection, transaction, """
+                INSERT INTO own_market_orders(character_id,order_id,type_id,location_id,is_buy,price,volume_remain,volume_total,
+                  issued_at,state,is_historical,raw_json)
+                VALUES($character,$order,$type,$location,$buy,$price,$remain,$total,$issued,$state,$historical,$json)
+                ON CONFLICT(character_id,order_id) DO UPDATE SET type_id=excluded.type_id,location_id=excluded.location_id,
+                  is_buy=excluded.is_buy,price=excluded.price,volume_remain=excluded.volume_remain,volume_total=excluded.volume_total,
+                  issued_at=excluded.issued_at,state=excluded.state,is_historical=excluded.is_historical,raw_json=excluded.raw_json;
+                """, cancellationToken, ("$character", snapshot.CharacterId), ("$order", GetInt64(item, "order_id")),
+                ("$type", GetInt64(item, "type_id")), ("$location", GetInt64(item, "location_id")),
+                ("$buy", GetBoolean(item, "is_buy_order") ? 1 : 0), ("$price", GetDouble(item, "price")),
+                ("$remain", GetInt64(item, "volume_remain")), ("$total", GetInt64(item, "volume_total")),
+                ("$issued", GetString(item, "issued")), ("$state", GetString(item, "state")),
+                ("$historical", historical ? 1 : 0), ("$json", item.GetRawText()));
+    }
+
     private static async Task<JsonElement> ReadSingletonAsync(SqliteConnection connection, string table, long characterId,
         CancellationToken cancellationToken)
     {
@@ -294,6 +353,37 @@ public sealed class CharacterDataRepository
             ORDER BY start_date DESC, job_id DESC LIMIT $limit OFFSET $offset;
             """;
         AddHistoryParameters(command, characterId, query);
+        command.Parameters.AddWithValue("$status", (object?)query.Status ?? DBNull.Value);
+        return JsonSerializer.SerializeToElement((await ReadJsonRowsAsync(command, cancellationToken)).Select(Parse).ToArray());
+    }
+
+    private static async Task<JsonElement> ReadJournalAsync(SqliteConnection connection, long characterId, CharacterDataQuery query,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT raw_json FROM wallet_journal WHERE character_id=$character
+              AND ($status IS NULL OR ref_type=$status) AND ($from IS NULL OR occurred_at >= $from) AND ($to IS NULL OR occurred_at <= $to)
+            ORDER BY occurred_at DESC,entry_id DESC LIMIT $limit OFFSET $offset;
+            """;
+        AddHistoryParameters(command, characterId, query); command.Parameters.AddWithValue("$status", (object?)query.Status ?? DBNull.Value);
+        return JsonSerializer.SerializeToElement((await ReadJsonRowsAsync(command, cancellationToken)).Select(Parse).ToArray());
+    }
+
+    private static async Task<JsonElement> ReadOrdersAsync(SqliteConnection connection, long characterId, CharacterDataQuery query,
+        bool historical, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT raw_json FROM own_market_orders WHERE character_id=$character AND is_historical=$historical
+              AND ($type IS NULL OR type_id=$type) AND ($location IS NULL OR location_id=$location)
+              AND ($buy IS NULL OR is_buy=$buy) AND ($status IS NULL OR state=$status)
+              AND ($from IS NULL OR issued_at >= $from) AND ($to IS NULL OR issued_at <= $to)
+            ORDER BY issued_at DESC,order_id DESC LIMIT $limit OFFSET $offset;
+            """;
+        AddHistoryParameters(command, characterId, query);
+        command.Parameters.AddWithValue("$historical", historical ? 1 : 0);
+        command.Parameters.AddWithValue("$buy", query.IsBuy is null ? DBNull.Value : query.IsBuy.Value ? 1 : 0);
         command.Parameters.AddWithValue("$status", (object?)query.Status ?? DBNull.Value);
         return JsonSerializer.SerializeToElement((await ReadJsonRowsAsync(command, cancellationToken)).Select(Parse).ToArray());
     }

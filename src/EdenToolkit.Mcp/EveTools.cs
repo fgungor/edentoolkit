@@ -32,14 +32,14 @@ public sealed class EveTools(EdenServices services)
     public Task<IReadOnlyList<SdeName>> SearchNames([Description("Case-insensitive substring to find.")] string query,
         [Description("Maximum matches, from 1 to 100.")] int limit = 20, CancellationToken cancellationToken = default) => services.Sde.SearchAsync(query, limit, cancellationToken);
 
-    [McpServerTool(Name = "eve_sync_character"), Description("Refresh a tracked character's location, assets, wallet, skills, wallet transaction history, and industry jobs from ESI and transactionally store them in local SQLite.")]
+    [McpServerTool(Name = "eve_sync_character"), Description("Refresh tracked character data including assets, wallet activity, industry jobs, and own market orders from ESI and transactionally store it in local SQLite.")]
     public Task<CharacterSyncResult> SyncCharacter([Description("Tracked EVE character ID.")] long characterId,
         [Description("Force ESI revalidation instead of accepting fresh HTTP cache entries.")] bool refresh = false,
         CancellationToken cancellationToken = default) => services.Tracking.SyncAsync(characterId, refresh, cancellationToken);
 
     [McpServerTool(Name = "eve_character_data"), Description("Query previously synced character location, assets, wallet, skills, wallet transactions, or industry jobs from local SQLite without calling ESI.")]
     public Task<CharacterSnapshot> CharacterData([Description("Tracked EVE character ID.")] long characterId,
-        [Description("One of: location, assets, wallet, skills, transactions, jobs.")] string aspect,
+        [Description("One of: location, assets, wallet, skills, transactions, jobs, journal, orders, order-history.")] string aspect,
         [Description("Maximum asset or skill rows to return.")] int limit = 1000,
         [Description("Asset or skill row offset.")] int offset = 0,
         [Description("Optional asset type ID or skill type ID.")] long? typeId = null,
@@ -51,4 +51,25 @@ public sealed class EveTools(EdenServices services)
         [Description("Optional inclusive upper date bound.")] DateTimeOffset? to = null,
         CancellationToken cancellationToken = default) => services.Tracking.QueryAsync(characterId, aspect,
             new(limit, offset, typeId, locationId, minimumSkillLevel, isBuy, status, from, to), cancellationToken);
+
+    [McpServerTool(Name = "eve_market_quote"), Description("Get a compact current hub quote and regional historical statistics for an EVE item. Calculates best prices, 5%-depth VWAP prices, spread, and relevant order volume without exposing the raw order book.")]
+    public Task<MarketQuoteAnalysis> MarketQuote([Description("Exact item name or numeric type ID.")] string item,
+        [Description("Supported hub: Hek, Jita, Dodixie, or Amarr.")] string hub = "Hek",
+        [Description("Number of recent regional history days to summarize.")] int historyDays = 30,
+        [Description("Force ESI revalidation.")] bool refresh = false,
+        CancellationToken cancellationToken = default) => services.Market.GetQuoteAsync(item, hub, historyDays, refresh, cancellationToken);
+
+    [McpServerTool(Name = "eve_compare_market_hubs"), Description("Compare compact market quotes for an item across any subset of Hek, Jita, Dodixie, and Amarr.")]
+    public Task<IReadOnlyList<MarketQuoteAnalysis>> CompareMarketHubs([Description("Exact item name or numeric type ID.")] string item,
+        [Description("Comma-separated hubs; defaults to Hek,Jita.")] string hubs = "Hek,Jita",
+        [Description("Recent regional history days.")] int historyDays = 30,
+        CancellationToken cancellationToken = default) => services.Market.CompareHubsAsync(item,
+            hubs.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), historyDays, false, cancellationToken);
+
+    [McpServerTool(Name = "eve_value_inventory"), Description("Deterministically value a character's SQLite-cached assets at Hek or Jita using explicit best-buy, best-sell, depth-buy, or depth-sell pricing.")]
+    public Task<InventoryValuation> ValueInventory([Description("Tracked EVE character ID.")] long characterId,
+        [Description("Supported hub: Hek, Jita, Dodixie, or Amarr.")] string hub = "Hek",
+        [Description("Optional asset location ID filter.")] long? locationId = null,
+        [Description("One of best-buy, best-sell, depth-buy, depth-sell.")] string valuation = "depth-buy",
+        CancellationToken cancellationToken = default) => services.Inventory.ValueAsync(characterId, hub, locationId, valuation, cancellationToken);
 }
