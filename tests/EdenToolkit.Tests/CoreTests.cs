@@ -142,6 +142,36 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public async Task FittingService_EnrichesSavedFittingsAndFiltersByHull()
+    {
+        var zip = MakeZip(
+            ("types.jsonl", """
+                {"_key":587,"name":{"en":"Rifter"}}
+                {"_key":518,"name":{"en":"Basic Gyrostabilizer"}}
+                {"_key":34,"name":{"en":"Tritanium"}}
+                """),
+            ("planetSchematics.jsonl", "{\"_key\":65,\"cycleTime\":1800,\"name\":{\"en\":\"Test PI\"},\"pins\":[2469],\"types\":[{\"_key\":34,\"isInput\":false,\"quantity\":20}]}\n"));
+        using var services = CreateServices(new StubHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(zip) }));
+        await services.Sde.UpdateAsync(force: true);
+        await File.WriteAllTextAsync(Path.Combine(_temp, "characters.json"), """
+            [{"characterId":7,"name":"Alice Example","clientId":"client","redirectUri":"http://localhost/","scopes":[],"addedAt":"2026-08-19T00:00:00Z","protectedRefreshToken":""}]
+            """);
+        await services.CharacterData.SaveAsync(Snapshot(7, "fittings", """
+            [{"fitting_id":42,"name":"Fast Rifter","description":"test","ship_type_id":587,
+              "items":[{"type_id":518,"flag":"LoSlot0","quantity":1},{"type_id":34,"flag":"Cargo","quantity":100}]}]
+            """, DateTimeOffset.UtcNow));
+
+        var fits = await services.Fittings.CharacterFittingsAsync("Alice", "rifter");
+
+        var fit = Assert.Single(fits);
+        Assert.Equal("Rifter", fit.ShipTypeName);
+        Assert.Equal("Basic Gyrostabilizer", fit.Items[0].TypeName);
+        Assert.Equal("low", fit.Items[0].Category);
+        Assert.Equal("cargo", fit.Items[1].Category);
+    }
+
+    [Fact]
     public async Task SdeUpdate_BuildsEnglishNameIndex()
     {
         var zip = MakeZip(("agentTypes.jsonl", "{\"_key\":1,\"name\":\"NonAgent\"}\n"),

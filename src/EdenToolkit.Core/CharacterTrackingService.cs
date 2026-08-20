@@ -23,7 +23,8 @@ public sealed class CharacterTrackingService(EsiClient esi, EveSsoService sso, C
             await FetchAsync(characterId, "jobs", $"latest/characters/{characterId}/industry/jobs/?include_completed=true", token, refresh, cancellationToken),
             await FetchPagedAsync(characterId, "journal", $"latest/characters/{characterId}/wallet/journal/", token, refresh, cancellationToken),
             await FetchPagedAsync(characterId, "orders", $"latest/characters/{characterId}/orders/", token, refresh, cancellationToken),
-            await FetchPagedAsync(characterId, "order-history", $"latest/characters/{characterId}/orders/history/", token, refresh, cancellationToken)
+            await FetchPagedAsync(characterId, "order-history", $"latest/characters/{characterId}/orders/history/", token, refresh, cancellationToken),
+            await FetchAsync(characterId, "fittings", $"latest/characters/{characterId}/fittings/", token, refresh, cancellationToken)
         };
         return new(characterId, DateTimeOffset.UtcNow, snapshots);
     }
@@ -109,7 +110,7 @@ public sealed class CharacterTrackingService(EsiClient esi, EveSsoService sso, C
 
     private static string NormalizeKind(string kind) => kind.ToLowerInvariant() switch
     {
-        "location" or "assets" or "wallet" or "skills" or "transactions" or "jobs" or "journal" or "orders" or "order-history" or "pi" => kind.ToLowerInvariant(),
+        "location" or "assets" or "wallet" or "skills" or "transactions" or "jobs" or "journal" or "orders" or "order-history" or "fittings" or "pi" => kind.ToLowerInvariant(),
         _ => throw new ArgumentException("Unsupported character data kind.", nameof(kind))
     };
 }

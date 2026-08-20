@@ -13,6 +13,7 @@ public sealed class EdenServices : IDisposable
     public CorporationTrackingService CorporationTracking { get; }
     public PlanetaryIndustryService PlanetaryIndustry { get; }
     public ProductionCapacityService ProductionCapacity { get; }
+    public FittingService Fittings { get; }
     public CharacterDataRepository CharacterData { get; }
     public MarketDataService Market { get; }
     public InventoryService Inventory { get; }
@@ -33,6 +34,7 @@ public sealed class EdenServices : IDisposable
         CorporationTracking = new CorporationTrackingService(Esi, Sso, Characters, Corporations, CharacterData);
         PlanetaryIndustry = new PlanetaryIndustryService(Esi, Sso, Characters, CharacterData, Sde);
         ProductionCapacity = new ProductionCapacityService(Corporations, CharacterData, Sde);
+        Fittings = new FittingService(Characters, CharacterData, Sde, Esi);
         var marketRepository = new MarketDataRepository(Options);
         Market = new MarketDataService(Esi, Sde, marketRepository);
         Inventory = new InventoryService(CharacterData, Market, Sde);
