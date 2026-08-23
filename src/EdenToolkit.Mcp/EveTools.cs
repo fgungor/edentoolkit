@@ -128,6 +128,53 @@ public sealed class EveTools(EdenServices services)
         [Description("Force ESI revalidation.")] bool refresh = false,
         CancellationToken cancellationToken = default) => services.Market.GetQuoteAsync(item, hub, historyDays, refresh, cancellationToken);
 
+    [McpServerTool(Name = "eve_market_depth"), Description("Get current aggregated buy/sell price levels at a supported hub, including best prices and shallow 5%-volume depth prices.")]
+    public Task<MarketDepth> MarketDepth([Description("Exact item name or numeric type ID.")] string item,
+        [Description("Supported hub: Hek, Jita, Dodixie, or Amarr.")] string hub = "Jita",
+        [Description("Maximum aggregated price levels per side.")] int levels = 10,
+        [Description("Force ESI revalidation.")] bool refresh = false,
+        CancellationToken cancellationToken = default) => services.Market.GetDepthAsync(item, hub, levels, refresh, cancellationToken);
+
+    [McpServerTool(Name = "eve_market_history"), Description("Get cached-and-refreshed ESI daily market history and deterministic liquidity statistics for an item and region/hub.")]
+    public Task<MarketHistoryStats> MarketHistory([Description("Exact item name or numeric type ID.")] string item,
+        [Description("Supported hub name or numeric EVE region ID.")] string region = "Jita",
+        [Description("Number of recent days, 1-3650.")] int days = 30,
+        [Description("Force ESI revalidation.")] bool refresh = false,
+        CancellationToken cancellationToken = default) => services.Market.GetHistoryAsync(item, region, days, refresh, cancellationToken);
+
+    [McpServerTool(Name = "eve_trading_position"), Description("Combine SQLite-cached inventory, active orders, and durable wallet transactions into a character's station-trading position for one item.")]
+    public Task<TradingPosition> TradingPosition([Description("Exact item name or numeric type ID.")] string item,
+        [Description("Tracked character ID, full name, or unique first name.")] string character,
+        [Description("Supported hub.")] string hub = "Jita", [Description("Recent transaction window in days.")] int days = 7,
+        CancellationToken cancellationToken = default) => services.StationTrading.GetPositionAsync(item, character, hub, days, cancellationToken);
+
+    [McpServerTool(Name = "eve_order_state"), Description("Measure a cached active order against current competition, fill progress, age, recent fill rate, and historical market turnover. Returns measurements, not a reprice decision.")]
+    public Task<OrderState> OrderState([Description("Cached EVE market order ID.")] long orderId,
+        [Description("Optional tracked character; omit to search all tracked characters.")] string? character = null,
+        [Description("Force public market revalidation.")] bool refreshMarket = false,
+        CancellationToken cancellationToken = default) => services.StationTrading.GetOrderStateAsync(orderId, character, refreshMarket, cancellationToken);
+
+    [McpServerTool(Name = "eve_station_trade_candidates"), Description("Rank a manageable candidate set from compact cached hub snapshots using after-fee spread, liquidity, depth, capital, and expected ISK/day. Query interesting items first to populate the snapshot universe.")]
+    public Task<IReadOnlyList<StationTradeCandidate>> StationTradeCandidates(
+        [Description("Supported hub.")] string hub, [Description("ISK available to deploy.")] decimal availableCapital,
+        [Description("Maximum candidates, 1-100.")] int maxItems = 50,
+        [Description("Minimum spread after configured fees.")] decimal minimumSpreadAfterFeesPercent = 2m,
+        [Description("Minimum regional average daily units.")] decimal minimumDailyVolume = 10m,
+        [Description("Character sales tax percentage.")] decimal salesTaxPercent = 3.6m,
+        [Description("Broker fee percentage per order side.")] decimal brokerFeePercent = 3m,
+        CancellationToken cancellationToken = default) => services.StationTrading.FindCandidatesAsync(hub, availableCapital,
+            maxItems, minimumSpreadAfterFeesPercent, minimumDailyVolume, salesTaxPercent, brokerFeePercent, cancellationToken);
+
+    [McpServerTool(Name = "eve_station_trade_state"), Description("Focused station-trading view combining current depth, 30-day history, optional character position, fees, turnover, return-on-capital, and expected ISK/day metrics.")]
+    public Task<StationTradeState> StationTradeState([Description("Exact item name or numeric type ID.")] string item,
+        [Description("Supported hub.")] string hub = "Jita",
+        [Description("Optional tracked character to include cached inventory, orders, and transactions.")] string? character = null,
+        [Description("Character sales tax percentage.")] decimal salesTaxPercent = 3.6m,
+        [Description("Broker fee percentage per order side.")] decimal brokerFeePercent = 3m,
+        [Description("Force public market revalidation.")] bool refresh = false,
+        CancellationToken cancellationToken = default) => services.StationTrading.GetStateAsync(item, hub, character,
+            salesTaxPercent, brokerFeePercent, refresh, cancellationToken);
+
     [McpServerTool(Name = "eve_compare_market_hubs"), Description("Compare compact market quotes for an item across any subset of Hek, Jita, Dodixie, and Amarr.")]
     public Task<IReadOnlyList<MarketQuoteAnalysis>> CompareMarketHubs([Description("Exact item name or numeric type ID.")] string item,
         [Description("Comma-separated hubs; defaults to Hek,Jita.")] string hubs = "Hek,Jita",

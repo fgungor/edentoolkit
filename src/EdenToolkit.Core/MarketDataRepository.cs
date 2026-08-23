@@ -52,6 +52,24 @@ public sealed class MarketDataRepository
             Decimal(reader, 9), Decimal(reader, 10), DateTimeOffset.Parse(reader.GetString(11), CultureInfo.InvariantCulture));
     }
 
+    public async Task<IReadOnlyList<MarketQuote>> ReadQuotesAsync(string hub, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString); await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT type_id FROM market_quotes WHERE hub=$hub ORDER BY quoted_at DESC;";
+        Add(command, "$hub", hub);
+        var ids = new List<int>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken)) ids.Add(reader.GetInt32(0));
+        var result = new List<MarketQuote>();
+        foreach (var id in ids)
+            if (await ReadQuoteAsync(id, hub, cancellationToken) is { } quote) result.Add(quote);
+        return result;
+    }
+
+    public Task<IReadOnlyList<MarketHistoryDay>> ReadCachedHistoryAsync(int typeId, int regionId, int days,
+        CancellationToken cancellationToken = default) => ReadHistoryAsync(typeId, regionId, days, cancellationToken);
+
     public async Task SaveHistoryAsync(int typeId, int regionId, IEnumerable<MarketHistoryDay> history,
         CancellationToken cancellationToken = default)
     {

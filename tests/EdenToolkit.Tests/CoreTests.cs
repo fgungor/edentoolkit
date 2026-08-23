@@ -316,6 +316,8 @@ public sealed class CoreTests : IDisposable
         await services.Sde.UpdateAsync();
 
         var analysis = await services.Market.GetQuoteAsync("Tritanium", "Hek", 30);
+        var depth = await services.Market.GetDepthAsync("Tritanium", "Hek", 10);
+        var state = await services.StationTrading.GetStateAsync("Tritanium", "Hek", salesTaxPercent: 1m, brokerFeePercent: 1m);
         var numericAnalysis = await services.Market.GetQuoteAsync("34", "Hek", 30);
         var persisted = await new MarketDataRepository(services.Options).ReadQuoteAsync(34, "Hek");
         await services.CharacterData.SaveAsync(Snapshot(7, "assets", """
@@ -329,6 +331,10 @@ public sealed class CoreTests : IDisposable
         Assert.Equal(100m, analysis.Quote.DepthBuy);
         Assert.Equal(120m, analysis.Quote.DepthSell);
         Assert.Equal(20m, analysis.Quote.SpreadPercent);
+        Assert.Equal(2, depth.BuyLevels.Count);
+        Assert.Equal(5, depth.BuyLevels[0].Volume);
+        Assert.Equal(16.6m, state.Metrics.ExpectedProfitPerUnit);
+        Assert.Equal(16.6m, state.Metrics.SpreadAfterFeesPercent);
         Assert.Equal(110m, analysis.History.AveragePrice);
         Assert.Equal(1500m, analysis.History.AverageDailyVolume);
         Assert.Equal(120m, persisted?.BestSell);
@@ -336,6 +342,8 @@ public sealed class CoreTests : IDisposable
         Assert.Equal(1200m, inventory.ReplacementValue);
         Assert.Equal(new MarketHub("Dodixie", 60011866, 10000032), MarketDataService.Hubs["Dodixie"]);
         Assert.Equal(new MarketHub("Amarr", 60008494, 10000043), MarketDataService.Hubs["Amarr"]);
+        var candidates = await services.StationTrading.FindCandidatesAsync("Hek", 1_000_000m, 10, 1m, 1m, 1m, 1m);
+        Assert.Equal("Tritanium", Assert.Single(candidates).Item);
     }
 
     private static CharacterSnapshot Snapshot(long characterId, string kind, string json, DateTimeOffset fetched)

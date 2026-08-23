@@ -41,6 +41,24 @@ static async Task<int> MainAsync(string[] args)
             ["market", "compare", var item, .. var rest] => await services.Market.CompareHubsAsync(item,
                 (GetOption(rest, "--hubs") ?? "Hek,Jita").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
                 GetIntOption(rest, "--days") ?? 30, rest.Contains("--refresh")),
+            ["market", "depth", var item, .. var rest] => await services.Market.GetDepthAsync(item,
+                GetOption(rest, "--hub") ?? "Jita", GetIntOption(rest, "--levels") ?? 10, rest.Contains("--refresh")),
+            ["market", "history", var item, .. var rest] => await services.Market.GetHistoryAsync(item,
+                GetOption(rest, "--region") ?? GetOption(rest, "--hub") ?? "Jita", GetIntOption(rest, "--days") ?? 30,
+                rest.Contains("--refresh")),
+            ["market", "position", var item, var character, .. var rest] => await services.StationTrading.GetPositionAsync(item,
+                character, GetOption(rest, "--hub") ?? "Jita", GetIntOption(rest, "--days") ?? 7),
+            ["market", "order", var id, .. var rest] when long.TryParse(id, out var orderId) =>
+                await services.StationTrading.GetOrderStateAsync(orderId, GetOption(rest, "--character"), rest.Contains("--refresh")),
+            ["market", "focus", var item, .. var rest] => await services.StationTrading.GetStateAsync(item,
+                GetOption(rest, "--hub") ?? "Jita", GetOption(rest, "--character"),
+                GetDecimalOption(rest, "--sales-tax") ?? 3.6m, GetDecimalOption(rest, "--broker-fee") ?? 3m,
+                rest.Contains("--refresh")),
+            ["market", "candidates", .. var rest] => await services.StationTrading.FindCandidatesAsync(
+                GetOption(rest, "--hub") ?? "Jita", GetDecimalOption(rest, "--capital")
+                    ?? throw new ArgumentException("market candidates requires --capital ISK."), GetIntOption(rest, "--max-items") ?? 50,
+                GetDecimalOption(rest, "--min-spread") ?? 2m, GetDecimalOption(rest, "--min-volume") ?? 10m,
+                GetDecimalOption(rest, "--sales-tax") ?? 3.6m, GetDecimalOption(rest, "--broker-fee") ?? 3m),
             ["inventory", "value", .. var rest] => await ValueInventoryAsync(services, rest),
             _ => throw new ArgumentException("Unknown or incomplete command. Run 'eden help'.")
         };
@@ -111,6 +129,8 @@ static CharacterDataQuery GetCharacterQuery(string[] args) => new(
 
 static int? GetIntOption(string[] args, string name) => int.TryParse(GetOption(args, name), out var value) ? value : null;
 static long? GetLongOption(string[] args, string name) => long.TryParse(GetOption(args, name), out var value) ? value : null;
+static decimal? GetDecimalOption(string[] args, string name) => decimal.TryParse(GetOption(args, name),
+    System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var value) ? value : null;
 static DateTimeOffset? GetDateOption(string[] args, string name) => DateTimeOffset.TryParse(GetOption(args, name), out var value) ? value : null;
 static bool? GetSide(string[] args) => GetOption(args, "--side")?.ToLowerInvariant() switch
 {
@@ -158,6 +178,12 @@ Usage:
   eden fittings <character-name-or-id> [--query <fitting-or-hull-name>]
   eden market quote <item-name-or-type-id> [--hub Hek|Jita|Dodixie|Amarr] [--days N] [--refresh]
   eden market compare <item-name-or-type-id> [--hubs Hek,Jita,Dodixie,Amarr] [--days N]
+  eden market depth <item> [--hub HUB] [--levels N] [--refresh]
+  eden market history <item> [--region HUB|REGION_ID] [--days N] [--refresh]
+  eden market position <item> <character> [--hub HUB] [--days N]
+  eden market order <order-id> [--character CHARACTER] [--refresh]
+  eden market focus <item> [--hub HUB] [--character CHARACTER] [--sales-tax PCT] [--broker-fee PCT] [--refresh]
+  eden market candidates --hub HUB --capital ISK [--max-items N] [--min-spread PCT] [--min-volume UNITS]
   eden inventory value [character-name-or-id] [--hub Hek|Jita|Dodixie|Amarr] [--location-id ID]
                        [--valuation best-buy|best-sell|depth-buy|depth-sell]
 

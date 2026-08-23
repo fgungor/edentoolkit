@@ -17,6 +17,7 @@ public sealed class EdenServices : IDisposable
     public CharacterDataRepository CharacterData { get; }
     public MarketDataService Market { get; }
     public InventoryService Inventory { get; }
+    public StationTradingService StationTrading { get; }
 
     public EdenServices(EdenOptions? options = null, HttpMessageHandler? handler = null)
     {
@@ -38,6 +39,7 @@ public sealed class EdenServices : IDisposable
         var marketRepository = new MarketDataRepository(Options);
         Market = new MarketDataService(Esi, Sde, marketRepository);
         Inventory = new InventoryService(CharacterData, Market, Sde);
+        StationTrading = new StationTradingService(Market, Characters, CharacterData);
     }
 
     public void Dispose() => _httpClient.Dispose();

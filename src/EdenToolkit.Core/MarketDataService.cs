@@ -19,6 +19,47 @@ public sealed class MarketDataService(EsiClient esi, SdeService sde, MarketDataR
         return await GetQuoteAsync(checked((int)type.Id), type.Name, GetHub(hubName), historyDays, refresh, true, cancellationToken);
     }
 
+    public async Task<MarketDepth> GetDepthAsync(string item, string hubName, int levels = 10,
+        bool refresh = false, CancellationToken cancellationToken = default)
+    {
+        levels = Math.Clamp(levels, 1, 100);
+        var type = await ResolveTypeAsync(item, cancellationToken);
+        var hub = GetHub(hubName);
+        var orders = (await FetchOrdersAsync(checked((int)type.Id), hub.RegionId, refresh, cancellationToken))
+            .Where(order => order.GetProperty("location_id").GetInt64() == hub.LocationId).ToArray();
+        var buys = orders.Where(IsBuy).OrderByDescending(Price).ToArray();
+        var sells = orders.Where(order => !IsBuy(order)).OrderBy(Price).ToArray();
+        var buyVolume = buys.Sum(Volume); var sellVolume = sells.Sum(Volume);
+        var result = new MarketDepth(checked((int)type.Id), type.Name, hub.Name, hub.LocationId, hub.RegionId,
+            buys.Length == 0 ? null : Price(buys[0]), sells.Length == 0 ? null : Price(sells[0]),
+            buys.Length == 0 || sells.Length == 0 || Price(buys[0]) <= 0 ? null : (Price(sells[0]) - Price(buys[0])) / Price(buys[0]) * 100m,
+            Levels(buys, levels), Levels(sells, levels), DepthVwap(buys, buyVolume), DepthVwap(sells, sellVolume),
+            buyVolume, sellVolume, DateTimeOffset.UtcNow);
+        await repository.SaveQuoteAsync(new(result.TypeId, result.TypeName, result.Hub, result.LocationId, result.RegionId,
+            result.BestBuy, result.BestSell, result.BuyDepthPrice, result.SellDepthPrice, result.BuyVolume, result.SellVolume,
+            result.BestBuy is not null && result.BestSell is not null ? result.BestSell - result.BestBuy : null,
+            result.SpreadPercent, result.Timestamp), cancellationToken);
+        return result;
+    }
+
+    public async Task<MarketHistoryStats> GetHistoryAsync(string item, string hubOrRegion, int days = 30,
+        bool refresh = false, CancellationToken cancellationToken = default)
+    {
+        var type = await ResolveTypeAsync(item, cancellationToken);
+        var regionId = int.TryParse(hubOrRegion, out var numeric) ? numeric : GetHub(hubOrRegion).RegionId;
+        return await FetchAndSummarizeHistoryAsync(checked((int)type.Id), regionId, days, refresh, cancellationToken);
+    }
+
+    internal MarketHub ResolveHub(string name) => GetHub(name);
+    internal Task<SdeName> ResolveMarketTypeAsync(string item, CancellationToken cancellationToken) => ResolveTypeAsync(item, cancellationToken);
+    internal Task<IReadOnlyList<MarketQuote>> CachedQuotesAsync(string hub, CancellationToken cancellationToken) =>
+        repository.ReadQuotesAsync(GetHub(hub).Name, cancellationToken);
+    internal async Task<MarketHistoryStats> CachedHistoryAsync(int typeId, int regionId, int days, CancellationToken cancellationToken)
+    {
+        var history = (await repository.ReadCachedHistoryAsync(typeId, regionId, days, cancellationToken)).ToArray();
+        return Summarize(typeId, regionId, days, history);
+    }
+
     public async Task<IReadOnlyList<MarketQuoteAnalysis>> CompareHubsAsync(string item, IEnumerable<string> hubs,
         int historyDays = 30, bool refresh = false, CancellationToken cancellationToken = default)
     {
@@ -106,6 +147,10 @@ public sealed class MarketDataService(EsiClient esi, SdeService sde, MarketDataR
     private static bool IsBuy(JsonElement order) => order.GetProperty("is_buy_order").GetBoolean();
     private static decimal Price(JsonElement order) => order.GetProperty("price").GetDecimal();
     private static long Volume(JsonElement order) => order.GetProperty("volume_remain").GetInt64();
+
+    private static IReadOnlyList<MarketDepthLevel> Levels(JsonElement[] orders, int count) => orders
+        .GroupBy(Price).OrderBy(group => orders.Length > 0 && IsBuy(orders[0]) ? -group.Key : group.Key)
+        .Take(count).Select(group => new MarketDepthLevel(group.Key, group.Sum(Volume), group.Count())).ToArray();
 
     private static decimal? DepthVwap(JsonElement[] orders, long totalVolume)
     {
