@@ -193,6 +193,11 @@ Environment:
   EDEN_ESI_COMPATIBILITY_DATE    Override the ESI compatibility date
   EDEN_EVE_CLIENT_ID             Override the built-in EVE SSO application client ID
   EDEN_EVE_REDIRECT_URI          Registered loopback callback URI
+  EDEN_ADAM4EVE_ENABLED          Set true to enable optional Adam4EVE analytics
+  EDEN_ADAM4EVE_USER_AGENT       Required identifiable User-Agent with contact method
+  EDEN_ADAM4EVE_BASE_URL         Override the Adam4EVE API base URL
+  EDEN_ADAM4EVE_MIN_INTERVAL_SECONDS  Central request interval (default 5)
+  EDEN_ADAM4EVE_TARGET_PARTICIPATION  Conservative execution share, 0-1 (default 0.05)
 
 Examples:
   eden esi get "latest/markets/10000002/orders/?type_id=34&order_type=all&page=1"

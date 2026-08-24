@@ -346,6 +346,43 @@ public sealed class CoreTests : IDisposable
         Assert.Equal("Tritanium", Assert.Single(candidates).Item);
     }
 
+    [Fact]
+    public async Task Adam4EveProvider_ParsesCachesAndKeepsTrackerSemanticsExplicit()
+    {
+        var handler = new StubHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            var path when path.EndsWith("/tracker") => Response(HttpStatusCode.OK, """
+                {"sell":{"amount":"800","high":"325","low":"310","avg":"320","orderNum":"73","iskValue":"256000"},
+                 "buy":{"amount":"900","high":"302","low":"299","avg":"301","orderNum":"81","iskValue":"270900"}}
+                """, TimeSpan.Zero),
+            var path when path.EndsWith("/market_price_history") => Response(HttpStatusCode.OK, """
+                [{"type_id":"2456","price_date":"2026-08-22","buy_price_low":"295","buy_price_avg":"300","buy_price_high":"302",
+                  "sell_price_low":"318","sell_price_avg":"321","sell_price_high":"325","buy_volume_low":"100","buy_volume_avg":"200",
+                  "buy_volume_high":"300","sell_volume_low":"400","sell_volume_avg":"500","sell_volume_high":"600"}]
+                """, TimeSpan.Zero),
+            var path when path.EndsWith("/market_percentiles") => Response(HttpStatusCode.OK,
+                "{\"percentile_buy\":\"301.4\",\"percentile_sell\":\"326.2\",\"lupdate\":\"2026-08-23 23:55:06\"}", TimeSpan.Zero),
+            _ => throw new InvalidOperationException(request.RequestUri.ToString())
+        });
+        var options = new EdenOptions { CacheDirectory = _temp, Adam4EveEnabled = true,
+            Adam4EveUserAgent = "EdenToolkit/0.1 (contact: test@example.com)",
+            Adam4EveBaseUri = new Uri("https://adam.test/"), Adam4EveMinimumRequestInterval = TimeSpan.Zero };
+        using var http = new HttpClient(handler);
+        var provider = new Adam4EveMarketAnalyticsProvider(http, options);
+
+        var activity = await provider.GetTradeActivityAsync(2456, 60003760, new(2026, 8, 22), new(2026, 8, 22));
+        var history = await provider.GetPriceHistoryAsync(2456, 10000002, new(2026, 8, 22), new(2026, 8, 22));
+        var percentiles = await provider.GetPercentilesAsync(2456, 10000002);
+        var requests = handler.RequestCount;
+        await provider.GetTradeActivityAsync(2456, 60003760, new(2026, 8, 22), new(2026, 8, 22));
+
+        Assert.Equal(800, activity!.EstimatedSellVolume);
+        Assert.Equal("estimated from sampled order-book changes", activity.Confidence);
+        Assert.Equal(7m, history!.HistoricalAverageSpreadPercent);
+        Assert.Equal(301.4m, percentiles!.BuyFivePercentPrice);
+        Assert.Equal(requests, handler.RequestCount);
+    }
+
     private static CharacterSnapshot Snapshot(long characterId, string kind, string json, DateTimeOffset fetched)
     {
         using var document = JsonDocument.Parse(json);

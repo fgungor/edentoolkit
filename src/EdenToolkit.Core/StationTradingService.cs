@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace EdenToolkit.Core;
 
 public sealed class StationTradingService(MarketDataService market, CharacterStore characters,
-    CharacterDataRepository data)
+    CharacterDataRepository data, IMarketAnalyticsProvider analytics, EdenOptions options)
 {
     public async Task<TradingPosition> GetPositionAsync(string item, string character, string hubName,
         int days = 7, CancellationToken cancellationToken = default)
@@ -70,20 +70,56 @@ public sealed class StationTradingService(MarketDataService market, CharacterSto
         var depth = await market.GetDepthAsync(item, hub, 20, refresh, cancellationToken);
         var history = await market.GetHistoryAsync(item, hub, 30, refresh, cancellationToken);
         TradingPosition? position = character is null ? null : await GetPositionAsync(item, character, hub, 7, cancellationToken);
+        var analyticsResult = await GetAnalyticsAsync(depth, position, cancellationToken);
         var recent = history.History.Take(7).ToArray();
         var volume7 = recent.Length == 0 ? 0m : recent.Average(x => (decimal)x.Volume);
         var volume30 = history.AverageDailyVolume;
         var profit = depth.BestBuy is not null && depth.BestSell is not null
             ? depth.BestSell * (1m - salesTaxPercent / 100m - brokerFeePercent / 100m) - depth.BestBuy * (1m + brokerFeePercent / 100m) : null;
         var spreadAfterFees = profit is not null && depth.BestBuy > 0 ? profit / depth.BestBuy * 100m : null;
-        var inventory = position?.Inventory ?? 0; var sellDays = volume7 > 0 ? inventory / volume7 : (decimal?)null;
+        var inventory = position?.Inventory ?? 0;
+        var executionRate = analyticsResult.EstimatedDailySellExecution ?? volume7;
+        var sellDays = executionRate > 0 ? inventory / executionRate : (decimal?)null;
         var committed = position?.BuyOrderIskCommitted ?? 0;
         decimal? turnover = committed > 0 && volume7 > 0 && depth.BestBuy > 0 ? volume7 * depth.BestBuy.Value / committed : null;
-        var dailyProfit = profit is null ? null : Math.Max(0, Math.Min(volume7 * .05m, depth.BuyVolume * .05m)) * profit;
+        var dailyProfit = profit is null ? null : Math.Max(0,
+            Math.Min(executionRate * options.Adam4EveTargetMarketParticipation, depth.BuyVolume * .05m)) * profit;
         var metrics = new TradeMetrics(spreadAfterFees, profit, volume7, volume30,
             position?.ActiveBuyVolume ?? 0, position?.ActiveSellVolume ?? 0,
             sellDays, sellDays, committed, turnover, dailyProfit, committed > 0 && dailyProfit is not null ? dailyProfit / committed * 100m : null);
-        return new(depth, history, position, metrics, salesTaxPercent, brokerFeePercent);
+        return new(depth, history, position, metrics, salesTaxPercent, brokerFeePercent, analyticsResult);
+    }
+
+    private async Task<ExternalMarketAnalytics> GetAnalyticsAsync(MarketDepth depth, TradingPosition? position,
+        CancellationToken cancellationToken)
+    {
+        if (!analytics.Enabled) return new(false, "Adam4EVE analytics is disabled", null, null, null,
+            null, null, null, null, null, null, null, "ESI only", "not available");
+        var today = DateOnly.FromDateTime(DateTime.UtcNow); var yesterday = today.AddDays(-1);
+        TradeActivity? activity = null; AnalyticsPriceHistory? priceHistory = null; MarketPercentiles? percentiles = null;
+        var failures = new List<string>();
+        try { activity = await analytics.GetTradeActivityAsync(depth.TypeId, depth.LocationId, yesterday, yesterday, cancellationToken); }
+        catch (Exception error) when (error is not OperationCanceledException) { failures.Add("tracker: " + error.Message); }
+        try { priceHistory = await analytics.GetPriceHistoryAsync(depth.TypeId, depth.RegionId, today.AddDays(-30), yesterday, cancellationToken); }
+        catch (Exception error) when (error is not OperationCanceledException) { failures.Add("history: " + error.Message); }
+        try { percentiles = await analytics.GetPercentilesAsync(depth.TypeId, depth.RegionId, cancellationToken); }
+        catch (Exception error) when (error is not OperationCanceledException) { failures.Add("percentiles: " + error.Message); }
+        var available = activity is not null || priceHistory is not null || percentiles is not null;
+        var days = activity is null ? 0 : Math.Max(1, activity.To.DayNumber - activity.From.DayNumber + 1);
+        decimal? dailyBuy = activity is null ? null : (decimal)activity.EstimatedBuyVolume / days;
+        decimal? dailySell = activity is null ? null : (decimal)activity.EstimatedSellVolume / days;
+        decimal? dailyTrades = activity is null ? null : (decimal)(activity.EstimatedBuyTrades + activity.EstimatedSellTrades) / days;
+        decimal? dailyIsk = activity is null ? null : (activity.EstimatedBuyIsk + activity.EstimatedSellIsk) / days;
+        var historicalSpread = priceHistory?.HistoricalAverageSpreadPercent;
+        decimal? spreadVsHistory = depth.SpreadPercent is null || historicalSpread is null || historicalSpread == 0
+            ? null : (depth.SpreadPercent - historicalSpread) / historicalSpread * 100m;
+        decimal? inventoryDays = position is not null && dailySell > 0 ? position.Inventory / dailySell : null;
+        decimal? positionShare = position is not null && dailySell > 0 ? position.Inventory / dailySell * 100m : null;
+        return new(available, available ? (failures.Count == 0 ? null : string.Join("; ", failures))
+                : failures.Count == 0 ? "No Adam4EVE coverage for this market/date" : string.Join("; ", failures),
+            activity, priceHistory, percentiles, dailyBuy, dailySell, dailyTrades, dailyIsk,
+            spreadVsHistory, inventoryDays, positionShare, "Adam4EVE enrichment; live prices remain ESI authoritative",
+            activity is null ? "contextual" : activity.Confidence);
     }
 
     public async Task<IReadOnlyList<StationTradeCandidate>> FindCandidatesAsync(string hubName, decimal availableCapital,

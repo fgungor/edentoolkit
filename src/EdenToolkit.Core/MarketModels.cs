@@ -37,11 +37,38 @@ public sealed record TradeMetrics(decimal? SpreadAfterFeesPercent, decimal? Expe
     decimal? CapitalTurnoverRate, decimal? ExpectedProfitPerDay, decimal? ExpectedReturnOnCapital);
 
 public sealed record StationTradeState(MarketDepth Depth, MarketHistoryStats History,
-    TradingPosition? Position, TradeMetrics Metrics, decimal SalesTaxPercent, decimal BrokerFeePercent);
+    TradingPosition? Position, TradeMetrics Metrics, decimal SalesTaxPercent, decimal BrokerFeePercent,
+    ExternalMarketAnalytics Analytics);
 
 public sealed record StationTradeCandidate(int TypeId, string Item, string Hub, decimal SpreadAfterFeesPercent,
     decimal DailyVolume, decimal BuyDepth, decimal SellDepth, decimal SuggestedPositionSize,
     decimal ExpectedDailyProfit, decimal ExpectedReturnOnCapital);
+
+public sealed record TradeActivity(int TypeId, long LocationId, DateOnly From, DateOnly To,
+    long EstimatedBuyVolume, long EstimatedSellVolume, int EstimatedBuyTrades, int EstimatedSellTrades,
+    decimal EstimatedBuyIsk, decimal EstimatedSellIsk, decimal? AverageBuyPrice, decimal? AverageSellPrice,
+    decimal? HighBuyPrice, decimal? LowBuyPrice, decimal? HighSellPrice, decimal? LowSellPrice,
+    string Source, string Confidence, DateTimeOffset FetchedAt);
+
+public sealed record HubMarketHistoryPoint(int TypeId, int RegionId, DateOnly Date,
+    decimal BuyPriceLow, decimal BuyPriceAverage, decimal BuyPriceHigh,
+    decimal SellPriceLow, decimal SellPriceAverage, decimal SellPriceHigh,
+    long BuyVolumeLow, long BuyVolumeAverage, long BuyVolumeHigh,
+    long SellVolumeLow, long SellVolumeAverage, long SellVolumeHigh, string Source);
+
+public sealed record AnalyticsPriceHistory(int TypeId, int RegionId, DateOnly From, DateOnly To,
+    IReadOnlyList<HubMarketHistoryPoint> Points, decimal? HistoricalAverageSpreadPercent,
+    string Source, DateTimeOffset FetchedAt);
+
+public sealed record MarketPercentiles(int TypeId, int RegionId, decimal? BuyFivePercentPrice,
+    decimal? SellFivePercentPrice, DateTimeOffset Timestamp, string Source);
+
+public sealed record ExternalMarketAnalytics(bool Available, string? Reason, TradeActivity? TradeActivity,
+    AnalyticsPriceHistory? PriceHistory, MarketPercentiles? Percentiles,
+    decimal? EstimatedDailyBuyExecution, decimal? EstimatedDailySellExecution,
+    decimal? EstimatedTradesPerDay, decimal? EstimatedIskTurnoverPerDay,
+    decimal? CurrentSpreadVsHistoricalPercent, decimal? InventoryDaysAtEstimatedSellRate,
+    decimal? PositionSizeVsDailyExecutionPercent, string Source, string Confidence);
 
 public sealed record MarketQuoteAnalysis(MarketQuote Quote, MarketHistoryStats History);
 

@@ -18,6 +18,7 @@ public sealed class EdenServices : IDisposable
     public MarketDataService Market { get; }
     public InventoryService Inventory { get; }
     public StationTradingService StationTrading { get; }
+    public IMarketAnalyticsProvider MarketAnalytics { get; }
 
     public EdenServices(EdenOptions? options = null, HttpMessageHandler? handler = null)
     {
@@ -39,7 +40,10 @@ public sealed class EdenServices : IDisposable
         var marketRepository = new MarketDataRepository(Options);
         Market = new MarketDataService(Esi, Sde, marketRepository);
         Inventory = new InventoryService(CharacterData, Market, Sde);
-        StationTrading = new StationTradingService(Market, Characters, CharacterData);
+        MarketAnalytics = Options.Adam4EveEnabled
+            ? new Adam4EveMarketAnalyticsProvider(_httpClient, Options)
+            : new DisabledMarketAnalyticsProvider();
+        StationTrading = new StationTradingService(Market, Characters, CharacterData, MarketAnalytics, Options);
     }
 
     public void Dispose() => _httpClient.Dispose();
